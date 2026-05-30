@@ -61,7 +61,38 @@ def _serialize(row: ApiKey, *, raw: str | None = None) -> dict[str, Any]:
     return out
 
 
-@router.post("", response_model=MintOut)
+@router.post(
+    "",
+    response_model=MintOut,
+    summary="Создать новый API-ключ",
+    description=(
+        "Минтит новый API-ключ формата `lc-XXXXXXXXXXXXXX` (17 chars, "
+        "70 bits entropy, confusion-safe alphabet). Используйте для "
+        "программного доступа: `Authorization: Bearer lc-XXX...`\n\n"
+        "**Raw-ключ возвращается ТОЛЬКО в этом ответе.** Сохраните "
+        "сразу — потом будет виден только prefix.\n\n"
+        "Лимит: до 25 активных ключей на пользователя."
+    ),
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "raw": "lc-abcde2345fghij",
+                        "prefix": "lc-abcde",
+                        "label": "ci-bot",
+                        "created_at": "2026-05-30T08:00:00+00:00",
+                        "last_used_at": None,
+                        "revoked_at": None,
+                    }
+                }
+            }
+        },
+        400: {"description": "Превышен лимит ключей"},
+        401: {"description": "Не авторизован"},
+    },
+)
 async def mint(body: MintIn, user: CurrentUser) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -101,7 +132,16 @@ async def mint(body: MintIn, user: CurrentUser) -> dict[str, Any]:
         return _serialize(row, raw=minted.raw)
 
 
-@router.get("", response_model=list[KeyOut])
+@router.get(
+    "",
+    response_model=list[KeyOut],
+    summary="Список ваших API-ключей",
+    description=(
+        "Возвращает все ваши ключи (включая отозванные). Поле `raw` "
+        "**НЕ возвращается** — его получает только тот, кто создал ключ, "
+        "в момент создания."
+    ),
+)
 async def list_keys(user: CurrentUser) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -115,7 +155,16 @@ async def list_keys(user: CurrentUser) -> list[dict[str, Any]]:
         return [_serialize(r) for r in rows]
 
 
-@router.delete("/{key_id}")
+@router.delete(
+    "/{key_id}",
+    summary="Отозвать API-ключ",
+    description=(
+        "Помечает ключ как отозванный (soft-delete). После этого "
+        "`Bearer lc-XXX...` с этим ключом будет получать 401. "
+        "Запросы с уже выписанными `lc_user_session` cookies продолжат "
+        "работать до их естественного истечения."
+    ),
+)
 async def revoke(key_id: int, user: CurrentUser) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:

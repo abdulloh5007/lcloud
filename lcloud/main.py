@@ -168,11 +168,119 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("LCloud shutting down")
 
 
+APP_DESCRIPTION = """
+**LCloud** — Telegram-userbot personal cloud. Файлы хранятся в супергруппах
+вашего Telegram-аккаунта; LCloud добавляет авторизацию, API, хранилище
+метаданных и веб-интерфейс поверх.
+
+## Архитектура коротко
+
+- **V1 (admin web)**: phone+code login, единственный admin = владелец TG-аккаунта,
+  использует `lc_session` cookie. Сохранён для совместимости / bootstrap.
+- **V2 (multi-user, рекомендуется)**: BIP39 seed-phrase → Ed25519 keypair.
+  Регистрация и вход — challenge-response с подписью на стороне клиента.
+  API-ключи `lc-XXXXXXXXXXXXXX` (17 chars) для программного доступа.
+- **Файлы**: подписываются клиентом (LC2 caption) с использованием Ed25519.
+  Сервер никогда не видит приватные ключи.
+
+## Аутентификация
+
+| Метод | Header / Cookie | Когда |
+|---|---|---|
+| Cookie `lc_user_session` | автоматически в браузере | Веб-UI |
+| `Authorization: Bearer lc-XXXXXXXXXXXXXX` | вручную | API-клиенты |
+| Cookie `lc_session` (V1) | автоматически | Только admin web (legacy) |
+
+Получить **API-ключ**: войдите в веб-UI → ⚙️ → API-ключи → «Создать ключ».
+Ключ показывается **один раз**, сохраните сразу.
+
+## Как зарегистрироваться
+
+1. Откройте `/`. Если юзербот ещё не подключён — введите телефон + код
+   Telegram (это разовая операция владельца сервера).
+2. После подключения юзербот пришлёт админу 12 слов в Saved Messages.
+3. На странице «Войти по сид-фразе» вставьте 12 слов → готово.
+4. Для нового аккаунта (не-admin): «Создать новый аккаунт» → 12 слов
+   сгенерируются → сохраните → вход автоматический.
+
+## Лимиты
+
+- Размер файла: 1 GiB по умолчанию (`LC_MAX_FILE_BYTES`)
+- Quota по умолчанию: 5 GiB на пользователя, 1 TiB у admin
+- API rate-limit: 10 verify/challenge запросов / 5 минут / IP
+- API-ключей: до 25 активных на пользователя
+
+## Open issues / V3 plans
+
+- Public REST API с granular scopes на ключах
+- Тарифы (free / paid)
+- Client-side encryption файлов (real E2E)
+"""
+
+TAGS_METADATA = [
+    {
+        "name": "auth_v2",
+        "description": (
+            "**V2 auth** — BIP39 seed-phrase login. Клиент держит приватный "
+            "ключ, сервер видит только публичный. Регистрация автоматическая "
+            "при первом /verify."
+        ),
+    },
+    {
+        "name": "api_keys",
+        "description": (
+            "Программный доступ к API через `Authorization: Bearer lc-XXX...`. "
+            "Создать в Settings → API keys. Raw-ключ показывается один раз."
+        ),
+    },
+    {
+        "name": "v2_clouds",
+        "description": (
+            "Per-user clouds. Cloud = супергруппа в Telegram-аккаунте админа, "
+            "помеченная LCLOUD1-маркером. Только владелец видит свои clouds; "
+            "admin видит все."
+        ),
+    },
+    {
+        "name": "v2_files",
+        "description": (
+            "Per-user files. Загрузка с client-side подписью (LC2). Размер "
+            "файла ограничен LC_MAX_FILE_BYTES (1 GiB по умолчанию). Quota "
+            "проверяется до загрузки в TG."
+        ),
+    },
+    {
+        "name": "auth",
+        "description": (
+            "**V1 admin auth** (legacy) — phone+code Telegram login. "
+            "Используется только для первого подключения юзербота."
+        ),
+    },
+    {
+        "name": "clouds",
+        "description": "V1 admin-only clouds endpoints (legacy).",
+    },
+    {
+        "name": "files",
+        "description": "V1 admin-only files endpoints (legacy).",
+    },
+    {"name": "tags", "description": "Тэги для файлов (admin-only пока)."},
+    {"name": "search", "description": "Полнотекстовый поиск по файлам."},
+    {"name": "magic", "description": "Magic-link login для admin (legacy)."},
+]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="LCloud",
+        title="LCloud API",
         version=__version__,
         lifespan=lifespan,
+        description=APP_DESCRIPTION,
+        openapi_tags=TAGS_METADATA,
+        contact={
+            "name": "LCloud",
+            "url": "https://github.com/mramziddin1228-gif/LCloud",
+        },
     )
     app.include_router(auth_router)
     app.include_router(auth_v2_router)

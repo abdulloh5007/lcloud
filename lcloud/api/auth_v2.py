@@ -147,7 +147,33 @@ def _decode_challenge_jwt(
 # ------------------------------------------------------------------ endpoints
 
 
-@router.post("/challenge")
+@router.post(
+    "/challenge",
+    summary="Запросить challenge для входа",
+    description=(
+        "**Шаг 1 из 2** при входе через seed-phrase.\n\n"
+        "Клиент посылает свой публичный ключ (32 байта Ed25519, hex 64 chars). "
+        "Сервер отвечает случайным nonce + signed JWT с этим nonce. "
+        "Клиент должен подписать сырой `nonce` своим приватным ключом и "
+        "отправить `signature` + `challenge_jwt` в `/auth/v2/verify`.\n\n"
+        "**Rate limit**: 10 запросов / 5 минут / IP."
+    ),
+    responses={
+        200: {
+            "description": "Challenge выпущен",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "challenge_jwt": "eyJhbGc...",
+                        "nonce": "1f5a8c...64hex",
+                        "expires_in": 60,
+                    }
+                }
+            },
+        },
+        429: {"description": "Rate limit превышен"},
+    },
+)
 async def post_challenge(
     body: ChallengeIn, request: Request
 ) -> dict[str, Any]:
@@ -181,7 +207,38 @@ async def post_challenge(
     }
 
 
-@router.post("/verify")
+@router.post(
+    "/verify",
+    summary="Проверить подпись и войти",
+    description=(
+        "**Шаг 2 из 2** при входе через seed-phrase.\n\n"
+        "Клиент: 1) декодирует `nonce` из `/challenge`, 2) подписывает его "
+        "Ed25519 приватным ключом, 3) шлёт challenge_jwt + signature сюда. "
+        "Сервер проверяет:\n\n"
+        "- `challenge_jwt` валиден и не истёк (60 сек TTL)\n"
+        "- nonce ещё не использовался (replay protection)\n"
+        "- Ed25519 signature валиден для pubkey из jwt\n\n"
+        "Если pubkey ещё не зарегистрирован — создаётся новая запись users "
+        "автоматически (`registered: true`).\n\n"
+        "Устанавливает cookie `lc_user_session` (HS256 JWT, 7 дней)."
+    ),
+    responses={
+        200: {
+            "description": "Авторизован — cookie установлен",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "user_id": 42,
+                        "role": "user",
+                        "registered": False,
+                    }
+                }
+            },
+        },
+        401: {"description": "Подпись невалидна / challenge истёк / replay"},
+        403: {"description": "Аккаунт заблокирован"},
+    },
+)
 async def post_verify(
     body: VerifyIn, request: Request, response: Response
 ) -> dict[str, Any]:
@@ -264,13 +321,44 @@ async def post_verify(
     return {"user_id": user_id, "role": role, "registered": registered}
 
 
-@router.post("/logout")
+@router.post(
+    "/logout",
+    summary="Выйти из сессии",
+    description="Удаляет cookie `lc_user_session`. Браузер становится анонимным.",
+)
 async def post_logout(response: Response) -> dict[str, Any]:
     response.delete_cookie(key=USER_COOKIE_NAME, path="/")
     return {"ok": True}
 
 
-@router.get("/me")
+@router.get(
+    "/me",
+    summary="Текущий пользователь",
+    description=(
+        "Возвращает идентичность залогиненного пользователя: pubkey, role, "
+        "quota usage, дата создания. Принимает cookie `lc_user_session` или "
+        "`Authorization: Bearer lc-XXX...`.\n\n"
+        "Используйте этот эндпоинт чтобы понять, валидна ли ваша сессия."
+    ),
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "user_id": 42,
+                        "role": "user",
+                        "pubkey": "5eb36f5d...64hex",
+                        "label": None,
+                        "storage_used_bytes": 1234567,
+                        "storage_quota_bytes": 5368709120,
+                        "created_at": "2026-05-30T08:00:00+00:00",
+                    }
+                }
+            }
+        },
+        401: {"description": "Нет валидного токена"},
+    },
+)
 async def get_me(
     lc_user_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:

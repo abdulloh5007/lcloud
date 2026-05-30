@@ -70,7 +70,14 @@ async def _admin_owner_id() -> int:
     return owner.id
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="Список ваших облаков",
+    description=(
+        "Возвращает все cloud-ы (TG-супергруппы), которые принадлежат вам. "
+        "Admin видит все cloud-ы всех пользователей. Сортировка: новые сверху."
+    ),
+)
 async def list_clouds(user: CurrentUser) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -82,7 +89,16 @@ async def list_clouds(user: CurrentUser) -> list[dict[str, Any]]:
     return [_serialize(c) for c in rows]
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    summary="Создать новый cloud",
+    description=(
+        "Создаёт новую TG-супергруппу под управлением админ-аккаунта (юзербот). "
+        "DB-запись `clouds` помечается owner_user_id=ваш_id. "
+        "Только владелец видит свой cloud в списке (admin видит все)."
+    ),
+)
 async def create_cloud(
     body: CreateCloudIn,
     user: CurrentUser,
@@ -119,7 +135,19 @@ async def create_cloud(
     return _serialize(cloud)
 
 
-@router.delete("/{cloud_id}", status_code=204, response_class=Response)
+@router.delete(
+    "/{cloud_id}",
+    status_code=204,
+    response_class=Response,
+    summary="Отключить cloud",
+    description=(
+        "Очищает LCLOUD1-маркер в `chat.about` и удаляет DB-запись. "
+        "Сама TG-супергруппа НЕ удаляется (per spec §9). После этого "
+        "файлы в этом cloud-е больше не индексируются LCloud-ом, но "
+        "физически остаются в Telegram. Можно подключить обратно через "
+        "/lc_connect или удалить вручную в Telegram."
+    ),
+)
 async def disconnect_cloud(
     cloud_id: int,
     user: CurrentUser,
