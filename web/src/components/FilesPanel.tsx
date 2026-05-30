@@ -147,11 +147,45 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
     return () => io.disconnect();
   }, [list.hasNextPage, list.isFetchingNextPage, list.fetchNextPage, items.length]);
 
+  /**
+   * Optimistic delete: drop the file from the cached list immediately,
+   * then re-validate against the server. If the server rejects, restore.
+   * This makes the UI feel instant — no spinner, no flash.
+   */
   const remove = useMutation({
     mutationFn: (id: number) => filesApi.remove(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["files"] });
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey: ["files", cloudId] });
+      const snapshot = qc.getQueriesData({ queryKey: ["files", cloudId] });
+      // For each cached page-set, drop the file optimistically
+      qc.setQueriesData<{ pages?: Page[] } | undefined>(
+        { queryKey: ["files", cloudId] },
+        (old) => {
+          if (!old?.pages) return old;
+          return {
+            ...old,
+            pages: old.pages.map((p) => ({
+              ...p,
+              items: p.items.filter((f) => f.id !== id),
+              total: Math.max(0, p.total - 1),
+            })),
+          };
+        },
+      );
+      return { snapshot };
+    },
+    onError: (_err, _id, ctx) => {
+      // Rollback on error
+      if (ctx?.snapshot) {
+        for (const [key, data] of ctx.snapshot) {
+          qc.setQueryData(key, data);
+        }
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["files", cloudId] });
       qc.invalidateQueries({ queryKey: ["search"] });
+      qc.invalidateQueries({ queryKey: ["v2", "quota"] });
     },
   });
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, clouds } from "@/api/client";
+import type { CloudRow } from "@/api/types";
 import { Button } from "./ui/Button";
 import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
@@ -46,11 +47,23 @@ export function Sidebar({
     },
   });
 
+  /** Optimistic cloud delete: remove from sidebar list immediately. */
   const remove = useMutation({
     mutationFn: (id: number) => clouds.remove(id),
-    onSuccess: (_data, id) => {
-      qc.invalidateQueries({ queryKey: ["clouds"] });
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey: ["clouds"] });
+      const previous = qc.getQueryData<CloudRow[]>(["clouds"]);
+      qc.setQueryData<CloudRow[]>(["clouds"], (old) =>
+        old ? old.filter((c) => c.id !== id) : old,
+      );
       if (selectedCloudId === id) onSelect(null);
+      return { previous };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["clouds"], ctx.previous);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["clouds"] });
     },
   });
 

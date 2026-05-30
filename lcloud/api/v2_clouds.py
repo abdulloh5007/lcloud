@@ -20,6 +20,12 @@ from pydantic import BaseModel, Field
 from telethon.errors import RPCError
 
 from lcloud.auth.v2_deps import CurrentUser
+from lcloud.cache import (
+    cache,
+    invalidate_files_in_cloud,
+    invalidate_user_clouds,
+    k_user_clouds,
+)
 from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, Owner
@@ -75,18 +81,27 @@ async def _admin_owner_id() -> int:
     summary="Список ваших облаков",
     description=(
         "Возвращает все cloud-ы (TG-супергруппы), которые принадлежат вам. "
-        "Сортировка: новые сверху."
+        "Сортировка: новые сверху.\n\n"
+        "_Кешируется на 30 сек по (user_id, role)._"
     ),
 )
 async def list_clouds(user: CurrentUser) -> list[dict[str, Any]]:
+    cache_key = k_user_clouds(user.id, user.role)
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+
     sm = get_sessionmaker()
     async with sm() as sess:
-        # Admins see all clouds across all users; regular users see only their own
+        # Регулярные пользователи видят только свои; admin видит все
         stmt = sa.select(Cloud).order_by(Cloud.created_at.desc())
         if user.role != "admin":
             stmt = stmt.where(Cloud.owner_user_id == user.id)
         rows = (await sess.execute(stmt)).scalars().all()
-    return [_serialize(c) for c in rows]
+
+    body = [_serialize(c) for c in rows]
+    await cache.set(cache_key, body, ttl=30.0)
+    return body
 
 
 @router.post(
@@ -123,14 +138,15 @@ async def create_cloud(
     async with sm() as sess:
         cloud = Cloud(
             chat_id=chat_id,
-            owner_id=admin_owner_id,  # TG-side signer is still admin
-            owner_user_id=user.id,  # logical owner is the V2 user
+            owner_id=admin_owner_id,  # TG-side signer
+            owner_user_id=user.id,  # logical owner
             name=body.name,
             about=marker,
         )
         sess.add(cloud)
         await sess.commit()
         await sess.refresh(cloud)
+    await invalidate_user_clouds(user.id)
     return _serialize(cloud)
 
 
@@ -160,9 +176,9 @@ async def disconnect_cloud(
         ).scalar_one_or_none()
         if cloud is None:
             raise HTTPException(404, detail={"reason": "not_found"})
-        # Authorization: admins delete anything, users only their own
+        # Ownership check — non-admin gets 404 (not 403) so existence isn't leaked
         if user.role != "admin" and cloud.owner_user_id != user.id:
-            raise HTTPException(403, detail={"reason": "forbidden"})
+            raise HTTPException(404, detail={"reason": "not_found"})
 
     try:
         entity = await manager.client.get_entity(cloud.chat_id)
@@ -177,6 +193,8 @@ async def disconnect_cloud(
     async with sm() as sess:
         await sess.execute(sa.delete(Cloud).where(Cloud.id == cloud_id))
         await sess.commit()
+    await invalidate_user_clouds(user.id)
+    await invalidate_files_in_cloud(cloud_id)
     return Response(status_code=204)
 
 

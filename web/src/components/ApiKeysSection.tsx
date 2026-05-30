@@ -37,7 +37,23 @@ export function ApiKeysSection() {
 
   const revokeM = useMutation({
     mutationFn: (id: number) => revokeApiKey(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['v2', 'keys'] }),
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey: ['v2', 'keys'] })
+      const previous = qc.getQueryData<ApiKey[]>(['v2', 'keys'])
+      // Optimistically mark as revoked in the local cache
+      qc.setQueryData<ApiKey[]>(['v2', 'keys'], (old) =>
+        old
+          ? old.map((k) =>
+              k.id === id ? { ...k, revoked_at: new Date().toISOString() } : k
+            )
+          : old
+      )
+      return { previous }
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(['v2', 'keys'], ctx.previous)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['v2', 'keys'] }),
   })
 
   const copy = useCallback(async (text: string) => {

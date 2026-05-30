@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from lcloud.auth.jwt_utils import ensure_jwt_secret
 from lcloud.auth.seed import verify_signature
+from lcloud.cache import cache, k_user_me
 from lcloud.config import Settings, get_settings
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import AuthChallenge, User
@@ -338,7 +339,8 @@ async def post_logout(response: Response) -> dict[str, Any]:
         "Возвращает идентичность залогиненного пользователя: pubkey, role, "
         "quota usage, дата создания. Принимает cookie `lc_user_session` или "
         "`Authorization: Bearer lc-XXX...`.\n\n"
-        "Используйте этот эндпоинт чтобы понять, валидна ли ваша сессия."
+        "Используйте этот эндпоинт чтобы понять, валидна ли ваша сессия.\n\n"
+        "_Кешируется на 60 сек по user_id._"
     ),
     responses={
         200: {
@@ -371,18 +373,26 @@ async def get_me(
     except pyjwt.PyJWTError as exc:
         raise HTTPException(401, detail={"reason": "invalid_session"}) from exc
 
+    user_id = int(payload["user_id"])
+
+    # Cache hit?
+    cached = await cache.get(k_user_me(user_id))
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+
     sm = get_sessionmaker()
     async with sm() as sess:
         user = (
             await sess.execute(
-                sa.select(User).where(User.id == int(payload["user_id"]))
+                sa.select(User).where(User.id == user_id)
             )
         ).scalar_one_or_none()
         if user is None:
             raise HTTPException(401, detail={"reason": "user_missing"})
         if user.suspended_at is not None:
             raise HTTPException(403, detail={"reason": "suspended"})
-    return {
+
+    body = {
         "user_id": user.id,
         "role": user.role,
         "pubkey": user.pubkey.hex(),
@@ -391,6 +401,8 @@ async def get_me(
         "storage_quota_bytes": user.storage_quota_bytes,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
+    await cache.set(k_user_me(user_id), body, ttl=60.0)
+    return body
 
 
 __all__ = [

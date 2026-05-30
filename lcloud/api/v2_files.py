@@ -45,6 +45,13 @@ from lcloud.auth.storage_quota import (
     increment_used,
 )
 from lcloud.auth.v2_deps import CurrentUser
+from lcloud.cache import (
+    cache,
+    invalidate_files_in_cloud,
+    invalidate_user_quota,
+    k_files_in_cloud,
+    k_user_quota,
+)
 from lcloud.config import get_settings
 from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.crypto.lc2 import Lc2Payload, verify_lc2_payload
@@ -98,10 +105,10 @@ async def _get_cloud_for_user(cloud_id: int, user_id: int, *, role: str) -> Clou
             await sess.execute(sa.select(Cloud).where(Cloud.id == cloud_id))
         ).scalar_one_or_none()
     if cloud is None:
-        raise HTTPException(404, detail={"reason": "cloud_not_found"})
-    # Authorization: admins see all; users only their own clouds
+        raise HTTPException(404, detail={"reason": "not_found"})
+    # Ownership check — non-admin gets 404 (not 403) so existence isn't leaked
     if role != "admin" and cloud.owner_user_id != user_id:
-        raise HTTPException(403, detail={"reason": "forbidden"})
+        raise HTTPException(404, detail={"reason": "not_found"})
     return cloud
 
 
@@ -148,6 +155,12 @@ async def list_files(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     cloud = await _get_cloud_for_user(cloud_id, user.id, role=user.role)
+
+    cache_key = k_files_in_cloud(cloud.id, user.id, user.role, limit, offset)
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+
     sm = get_sessionmaker()
     async with sm() as sess:
         cond = sa.and_(File.cloud_id == cloud.id, File.deleted_at.is_(None))
@@ -167,12 +180,16 @@ async def list_files(
                 .offset(offset)
             )
         ).scalars().all()
-    return {
+    body = {
         "items": [_serialize(f) for f in rows],
         "total": int(total),
         "limit": limit,
         "offset": offset,
     }
+    # Short TTL — uploads/deletes invalidate this proactively, but TTL
+    # is the safety net.
+    await cache.set(cache_key, body, ttl=30.0)
+    return body
 
 
 # ------------------------------------------------------------------ upload
@@ -421,6 +438,8 @@ async def upload_file(
         await sess.refresh(row)
 
     await increment_used(user.id, final_size)
+    await invalidate_user_quota(user.id)
+    await invalidate_files_in_cloud(cloud.id)
     out = _serialize(row)
     out["caption_kind"] = caption_kind
     out["uploaded_at_unix"] = uploaded_at_unix
@@ -451,9 +470,9 @@ async def download_file(
             )
         ).scalar_one_or_none()
         if row is None:
-            raise HTTPException(404, detail={"reason": "file_not_found"})
+            raise HTTPException(404, detail={"reason": "not_found"})
         if user.role != "admin" and row.owner_user_id != user.id:
-            raise HTTPException(403, detail={"reason": "forbidden"})
+            raise HTTPException(404, detail={"reason": "not_found"})
         cloud = (
             await sess.execute(sa.select(Cloud).where(Cloud.id == row.cloud_id))
         ).scalar_one()
@@ -496,9 +515,9 @@ async def delete_file(
             )
         ).scalar_one_or_none()
         if row is None:
-            raise HTTPException(404, detail={"reason": "file_not_found"})
+            raise HTTPException(404, detail={"reason": "not_found"})
         if user.role != "admin" and row.owner_user_id != user.id:
-            raise HTTPException(403, detail={"reason": "forbidden"})
+            raise HTTPException(404, detail={"reason": "not_found"})
         cloud = (
             await sess.execute(sa.select(Cloud).where(Cloud.id == row.cloud_id))
         ).scalar_one()
@@ -530,6 +549,8 @@ async def delete_file(
 
     if owner_user_id is not None:
         await increment_used(owner_user_id, -size_to_release)
+        await invalidate_user_quota(owner_user_id)
+    await invalidate_files_in_cloud(cloud.id)
     return Response(status_code=204)
 
 
@@ -538,12 +559,19 @@ async def delete_file(
 
 @files_router.get("/quota")
 async def get_quota(user: CurrentUser) -> dict[str, Any]:
+    cache_key = k_user_quota(user.id)
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+
     used, quota = await get_used_and_quota(user.id)
-    return {
+    body = {
         "used_bytes": used,
         "quota_bytes": quota,
         "free_bytes": max(0, quota - used),
     }
+    await cache.set(cache_key, body, ttl=10.0)
+    return body
 
 
 __all__ = ["clouds_files_router", "files_router"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 from collections.abc import Iterator
 from pathlib import Path
@@ -52,6 +53,7 @@ def app_with_userbot(
     monkeypatch.setenv("LC_MAX_FILE_BYTES", "10000000")  # 10 MB cap for tests
 
     from lcloud.api import auth_v2 as auth_v2_mod
+    from lcloud.cache import cache as global_cache
     from lcloud.config import get_settings
     from lcloud.db import base as base_mod
     from lcloud.userbot.client import UserbotManager, set_userbot_manager
@@ -60,6 +62,8 @@ def app_with_userbot(
     base_mod._engine = None
     base_mod._sessionmaker = None
     auth_v2_mod._v2_rate.reset()
+    # Per-test cache reset — otherwise previous test's data poisons us
+    asyncio.run(global_cache.clear())
 
     settings = get_settings()
     from tests.test_userbot import FakeTelegramClient
@@ -122,6 +126,7 @@ def app_with_userbot(
         base_mod._sessionmaker = None
         set_userbot_manager(None)
         auth_v2_mod._v2_rate.reset()
+        asyncio.run(global_cache.clear())
 
 
 def _login_admin_telegram(client: TestClient) -> None:
@@ -186,8 +191,8 @@ def test_delete_other_users_cloud_forbidden(
     app_with_userbot.cookies.clear()
     _login_v2(app_with_userbot)
     r = app_with_userbot.delete(f"/api/v1/clouds/{cloud_id}")
-    assert r.status_code == 403
-    assert r.json()["detail"]["reason"] == "forbidden"
+    assert r.status_code == 404
+    assert r.json()["detail"]["reason"] == "not_found"
 
 
 def test_clouds_require_auth(app_with_userbot: TestClient) -> None:
@@ -279,7 +284,7 @@ def test_files_isolated_per_user(app_with_userbot: TestClient) -> None:
     app_with_userbot.cookies.clear()
     _login_v2(app_with_userbot)
     r = app_with_userbot.get(f"/api/v1/clouds/{cloud_a}/files")
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 def test_delete_decrements_quota(app_with_userbot: TestClient) -> None:
@@ -320,7 +325,7 @@ def test_delete_other_users_file_forbidden(
     app_with_userbot.cookies.clear()
     _login_v2(app_with_userbot)
     r = app_with_userbot.delete(f"/api/v1/files/{file_id}")
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 def test_admin_sees_all_files(app_with_userbot: TestClient) -> None:
