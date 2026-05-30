@@ -516,6 +516,7 @@ def test_upload_default_compresses_jpeg(
 ) -> None:
     """Image upload re-encodes by default, server stores compressed bytes."""
     from PIL import Image
+
     from lcloud.userbot.files import UploadResult
 
     next_msg = [9000]
@@ -569,6 +570,7 @@ def test_upload_compress_false_keeps_original(
 ) -> None:
     """compress=false → bytes go to TG unchanged."""
     from PIL import Image
+
     from lcloud.userbot.files import UploadResult
 
     next_msg = [9100]
