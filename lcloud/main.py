@@ -41,6 +41,7 @@ from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import dispose_engine, get_sessionmaker, init_engine
 from lcloud.db.bootstrap import ensure_admin_owner, run_migrations
 from lcloud.db.models import Owner
+from lcloud.userbot.admin_bootstrap import ensure_admin_seed_delivered
 from lcloud.userbot.client import get_userbot_manager
 from lcloud.userbot.commands import (
     CommandContext,
@@ -111,6 +112,16 @@ async def _post_login_scan_if_authorized() -> None:
         owner_id=owner.id,
         expected_pubkey=bytes(vk),
     )
+
+    # V2: ensure admin user row + BIP39 seed delivered to Saved Messages
+    try:
+        await ensure_admin_seed_delivered(
+            client=manager.client,
+            sessionmaker=sm,
+            public_base_url=settings.lc_public_base_url,
+        )
+    except Exception:
+        logger.exception("admin seed bootstrap failed (non-fatal)")
 
 
 @asynccontextmanager

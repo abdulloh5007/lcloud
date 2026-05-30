@@ -22,6 +22,11 @@ dist/
 web/node_modules/
 web/dist/
 web/.vite/
+web/*.tsbuildinfo
+web/vite.config.d.ts
+web/vite.config.js
+web/src/**/*.d.ts
+web/src/**/*.js
 
 # --- logs / runtime ---
 logs/
