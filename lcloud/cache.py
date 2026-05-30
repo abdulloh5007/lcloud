@@ -1,30 +1,23 @@
-"""In-process TTL cache for read-heavy endpoints.
+"""In-process TTL cache + optional Redis backend for read-heavy endpoints.
 
-Why in-process (not Redis):
-- LCloud runs as a single uvicorn process; a per-process dict is enough
-  and has zero deployment overhead.
-- If we ever scale to multiple workers, we'll switch the implementation
-  here and the call sites won't need to change.
+When `LC_REDIS_URL` env var is set (e.g. `redis://localhost:6379/0`),
+all cache ops go through Redis — this lets you scale to multiple
+uvicorn workers / replicas without poisoned reads.
 
-Usage:
+When unset, falls back to in-memory dict (single process, single host).
+
+Usage stays the same:
     from lcloud.cache import cache
-
-    cached = await cache.get(f"quota:{user_id}")
-    if cached is not None:
-        return cached
-    fresh = await compute_quota(user_id)
-    await cache.set(f"quota:{user_id}", fresh, ttl=10.0)
-    return fresh
-
-Invalidation on writes:
-    await cache.delete(f"quota:{user_id}")
-    await cache.delete_prefix(f"files:cloud={cloud_id}:")
+    await cache.get("key")
+    await cache.set("key", value, ttl=30)
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -32,13 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class TTLCache:
-    """Simple async-safe TTL cache.
-
-    All values are kept in a single dict guarded by an asyncio.Lock.
-    Each entry is `(value, expires_at_monotonic)`. Expired entries
-    are evicted on `.get()` lazily. Use `.cleanup()` from a periodic
-    task to free memory eagerly if the cache grows.
-    """
+    """Async-safe TTL cache. In-process by default, Redis when configured."""
 
     def __init__(self, *, default_ttl: float = 60.0, max_entries: int = 10_000) -> None:
         self._data: dict[str, tuple[Any, float]] = {}
@@ -47,8 +34,41 @@ class TTLCache:
         self._max_entries = max_entries
         self._hits = 0
         self._misses = 0
+        self._redis: Any = None
+        self._redis_url = os.getenv("LC_REDIS_URL")
+
+    async def _get_redis(self) -> Any:
+        """Lazy-connect to Redis on first use; cache the connection."""
+        if self._redis is not None or not self._redis_url:
+            return self._redis
+        try:
+            import redis.asyncio as redis_async
+
+            self._redis = redis_async.from_url(
+                self._redis_url, decode_responses=True
+            )
+            await self._redis.ping()
+            logger.info("TTLCache backed by Redis at %s", self._redis_url)
+        except Exception as exc:
+            logger.warning("Redis unavailable (%s); falling back to memory", exc)
+            self._redis = None
+            self._redis_url = None
+        return self._redis
 
     async def get(self, key: str) -> Any | None:
+        r = await self._get_redis()
+        if r is not None:
+            try:
+                raw = await r.get(key)
+                if raw is None:
+                    self._misses += 1
+                    return None
+                self._hits += 1
+                return json.loads(raw)
+            except Exception as exc:
+                logger.warning("Redis get failed: %s; falling back", exc)
+
+        # In-memory fallback
         async with self._lock:
             entry = self._data.get(key)
             if entry is None:
@@ -64,20 +84,45 @@ class TTLCache:
 
     async def set(self, key: str, value: Any, *, ttl: float | None = None) -> None:
         ttl_v = self._default_ttl if ttl is None else ttl
+        r = await self._get_redis()
+        if r is not None:
+            try:
+                await r.set(key, json.dumps(value), ex=int(ttl_v))
+                return
+            except Exception as exc:
+                logger.warning("Redis set failed: %s; falling back", exc)
+
         async with self._lock:
-            # Soft cap on size: evict oldest when over the limit.
             if len(self._data) >= self._max_entries and key not in self._data:
-                # Evict the entry whose expires_at is earliest.
                 oldest = min(self._data, key=lambda k: self._data[k][1])
                 del self._data[oldest]
             self._data[key] = (value, time.monotonic() + ttl_v)
 
     async def delete(self, key: str) -> None:
+        r = await self._get_redis()
+        if r is not None:
+            try:
+                await r.delete(key)
+                return
+            except Exception as exc:
+                logger.warning("Redis delete failed: %s; falling back", exc)
+
         async with self._lock:
             self._data.pop(key, None)
 
     async def delete_prefix(self, prefix: str) -> int:
-        """Delete all keys starting with `prefix`. Returns number deleted."""
+        r = await self._get_redis()
+        if r is not None:
+            try:
+                # SCAN to find keys; DELETE in batches.
+                deleted = 0
+                async for k in r.scan_iter(match=f"{prefix}*", count=100):
+                    await r.delete(k)
+                    deleted += 1
+                return deleted
+            except Exception as exc:
+                logger.warning("Redis scan/delete failed: %s; falling back", exc)
+
         async with self._lock:
             keys = [k for k in self._data if k.startswith(prefix)]
             for k in keys:
@@ -85,13 +130,23 @@ class TTLCache:
             return len(keys)
 
     async def clear(self) -> None:
+        r = await self._get_redis()
+        if r is not None:
+            try:
+                await r.flushdb()
+                return
+            except Exception:
+                pass
+
         async with self._lock:
             self._data.clear()
 
     async def stats(self) -> dict[str, Any]:
         async with self._lock:
+            backend = "redis" if self._redis is not None else "memory"
             return {
-                "size": len(self._data),
+                "backend": backend,
+                "size": len(self._data) if backend == "memory" else None,
                 "hits": self._hits,
                 "misses": self._misses,
                 "hit_rate": (
@@ -100,7 +155,9 @@ class TTLCache:
             }
 
     async def cleanup_expired(self) -> int:
-        """Eagerly evict expired entries. Call from a background task if needed."""
+        """Eagerly evict expired entries (in-memory only; Redis does this itself)."""
+        if self._redis is not None:
+            return 0
         now = time.monotonic()
         async with self._lock:
             keys = [k for k, (_, exp) in self._data.items() if now > exp]
@@ -115,8 +172,6 @@ cache = TTLCache(default_ttl=60.0, max_entries=10_000)
 
 # ----------------------------------------------------------- key helpers
 
-# Centralizing the key naming so invalidation calls can't typo a prefix.
-
 
 def k_user_me(user_id: int) -> str:
     return f"me:{user_id}"
@@ -127,7 +182,6 @@ def k_user_quota(user_id: int) -> str:
 
 
 def k_user_clouds(user_id: int, role: str) -> str:
-    # Admin sees ALL clouds → separate key so admin/user caches don't poison
     return f"clouds:{role}:{user_id}"
 
 
@@ -147,15 +201,12 @@ async def invalidate_user_me(user_id: int) -> None:
 
 
 async def invalidate_user_clouds(user_id: int) -> None:
-    """Invalidate caller's view AND any admin's view (admin sees all)."""
     await cache.delete(k_user_clouds(user_id, "user"))
     await cache.delete(k_user_clouds(user_id, "admin"))
-    # Admin caches keyed by admin user_id — wipe all admin entries.
     await cache.delete_prefix("clouds:admin:")
 
 
 async def invalidate_files_in_cloud(cloud_id: int) -> None:
-    """File list pages for this cloud (any pagination, any role)."""
     await cache.delete_prefix(f"files:cloud={cloud_id}:")
 
 

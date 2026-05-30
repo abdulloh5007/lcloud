@@ -36,11 +36,14 @@ from lcloud.api import (
     payments_admin_router,
     payments_public_router,
     pin_recovery_router,
+    public_share_router,
     search_router,
+    shares_router,
     tags_router,
     v2_clouds_files_router,
     v2_clouds_router,
     v2_files_router,
+    versions_router,
 )
 from lcloud.api.docs import router as docs_router
 from lcloud.api.docs import serve_openapi
@@ -50,6 +53,7 @@ from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import dispose_engine, get_sessionmaker, init_engine
 from lcloud.db.bootstrap import ensure_admin_owner, run_migrations
 from lcloud.db.models import Owner
+from lcloud.metrics import install_metrics
 from lcloud.userbot.admin_bootstrap import ensure_admin_seed_delivered
 from lcloud.userbot.client import get_userbot_manager
 from lcloud.userbot.commands import (
@@ -279,6 +283,7 @@ def create_app() -> FastAPI:
     # Custom mobile-responsive /docs and /redoc + UTF-8 openapi.json
     app.include_router(docs_router)
     serve_openapi(app)
+    install_metrics(app)
 
     app.include_router(auth_router)
     app.include_router(auth_v2_router)
@@ -289,6 +294,9 @@ def create_app() -> FastAPI:
     app.include_router(v2_clouds_router)
     app.include_router(v2_clouds_files_router)
     app.include_router(v2_files_router)
+    app.include_router(versions_router)
+    app.include_router(shares_router)
+    app.include_router(public_share_router)
     # V1 legacy endpoints — hidden from Swagger (used by built-in admin
     # bootstrap flow but not part of the public API surface).
     app.include_router(clouds_router, include_in_schema=False)

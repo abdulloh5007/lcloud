@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "api_keys",
     "auth_challenges",
     "payment_requests",
+    "file_shares",
 }
 
 

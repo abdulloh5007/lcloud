@@ -67,6 +67,11 @@ class File(Base):
     owner_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
+    # File versioning: when not NULL, this file replaced the pointed row
+    # (which gets deleted_at set so it's hidden but queryable as a version).
+    replaces_file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("files.id", name="fk_files_replaces"), nullable=True
+    )
     original_name: Mapped[str] = mapped_column(String(512), nullable=False)
     mime: Mapped[str] = mapped_column(
         String(128), nullable=False, default="application/octet-stream"
@@ -217,6 +222,38 @@ class PaymentRequest(Base):
         ForeignKey("users.id", name="fk_payreq_user"), nullable=True
     )
     ip_addr: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class FileShare(Base):
+    """Public share link for a file (anonymous download by token)."""
+
+    __tablename__ = "file_shares"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[int] = mapped_column(
+        ForeignKey("files.id", name="fk_share_file", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", name="fk_share_user"),
+        nullable=False,
+        index=True,
+    )
+    token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    max_downloads: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    download_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ApiKey(Base):

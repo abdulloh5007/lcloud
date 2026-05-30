@@ -39,6 +39,10 @@ from lcloud.api.compression import (
     compress_image_in_place,
     is_compressible_mime,
 )
+from lcloud.api.compression_video import (
+    compress_video_in_place,
+    is_compressible_video_mime,
+)
 from lcloud.auth.storage_quota import (
     assert_can_store,
     get_used_and_quota,
@@ -331,6 +335,23 @@ async def upload_file(
             final_mime = file_mime
             was_compressed = False
             final_sha = original_sha
+    elif compress and is_compressible_video_mime(file_mime):
+        try:
+            (
+                final_path,
+                final_size,
+                final_mime,
+                was_compressed,
+            ) = compress_video_in_place(tmp_path, mime=file_mime)
+            if was_compressed:
+                final_sha = hashlib.sha256(final_path.read_bytes()).digest()
+        except Exception as exc:
+            logger.warning("video compression failed, uploading original: %s", exc)
+            final_path = tmp_path
+            final_size = original_size
+            final_mime = file_mime
+            was_compressed = False
+            final_sha = original_sha
 
     # Quota check uses the FINAL size we'll actually persist
     try:
@@ -420,6 +441,28 @@ async def upload_file(
 
     sm = get_sessionmaker()
     async with sm() as sess:
+        # File versioning: if a file with the same name+cloud already exists,
+        # mark it as superseded by this upload (soft-delete + link).
+        prev = (
+            await sess.execute(
+                sa.select(File).where(
+                    File.cloud_id == cloud.id,
+                    File.original_name == (
+                        file.filename or f"file-{uuid.uuid4().hex}"
+                    ),
+                    File.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if prev is not None and (
+            user.role == "admin" or prev.owner_user_id == user.id
+        ):
+            # Mark previous as superseded
+            prev.deleted_at = sa.func.now()
+            replaces_id: int | None = prev.id
+        else:
+            replaces_id = None
+
         row = File(
             cloud_id=cloud.id,
             message_id=message_id,
@@ -432,6 +475,7 @@ async def upload_file(
             signature=stored_signature,
             compressed=was_compressed,
             original_size_bytes=original_size if was_compressed else None,
+            replaces_file_id=replaces_id,
         )
         sess.add(row)
         await sess.commit()
