@@ -283,6 +283,23 @@ export const payments = {
     ),
 };
 
+// ---------------------------------------------------------------- pin recovery
+
+export const pinApi = {
+  /** Setup PIN (authenticated). Browser holds mnemonic in memory only. */
+  setup: (pin: string, mnemonic: string) =>
+    api<{ ok: boolean }>("/auth/v2/pin/setup", {
+      method: "POST",
+      body: JSON.stringify({ pin, mnemonic }),
+    }),
+  /** Recover seed phrase by contact + PIN (anonymous, IP rate-limited). */
+  recover: (contact_handle: string, pin: string) =>
+    api<{ mnemonic: string; warning: string }>("/auth/v2/pin/recover", {
+      method: "POST",
+      body: JSON.stringify({ contact_handle, pin }),
+    }),
+};
+
 // ---------------------------------------------------------------- search
 
 export const search = {
