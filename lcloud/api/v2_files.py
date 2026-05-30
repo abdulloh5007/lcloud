@@ -4,9 +4,11 @@ Per-user scoping via `files.owner_user_id`. TG-side operations still use
 the bootstrap admin's account (single Telethon session) but logical
 ownership and quota accounting belong to the calling V2 user.
 
-Round 5a scope: list / upload / download / delete + quota tracking.
-Future (Round 5b): client-side LC2 caption signing on upload, rename,
-thumbnails, search, tags.
+Round 5b scope: client-side LC2 caption signing.
+- Upload requires three optional-but-recommended fields:
+    `client_sha256` (hex 64), `signature` (hex 128), `ts` (unix int)
+- If supplied, server verifies sig and writes LC2 caption.
+- If omitted, server falls back to LC1 server-signed caption (legacy compat).
 """
 
 from __future__ import annotations
@@ -16,12 +18,13 @@ import hashlib
 import logging
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import (
     APIRouter,
     Depends,
+    Form,
     HTTPException,
     Query,
     Response,
@@ -40,6 +43,7 @@ from lcloud.auth.storage_quota import (
 from lcloud.auth.v2_deps import CurrentUser
 from lcloud.config import get_settings
 from lcloud.crypto.keys import ensure_admin_keypair
+from lcloud.crypto.lc2 import Lc2Payload, verify_lc2_payload
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, File
 from lcloud.userbot.client import UserbotManager, get_userbot_manager
@@ -49,6 +53,7 @@ from lcloud.userbot.files import (
     iter_download_file,
     upload_file_to_cloud,
 )
+from lcloud.userbot.files_lc2 import Lc2UploadResult, upload_file_lc2
 from lcloud.workers import get_worker_pool
 
 logger = logging.getLogger(__name__)
@@ -173,22 +178,43 @@ async def upload_file(
     user: CurrentUser,
     file: UploadFile = FileParam(...),
     manager: UserbotManager = Depends(get_userbot_manager),
+    client_sha256: Annotated[
+        str | None,
+        Form(description="Hex SHA-256 of file bytes, signed by client (LC2)."),
+    ] = None,
+    signature: Annotated[
+        str | None,
+        Form(description="Hex Ed25519 sig over sha256||ts||pubkey (LC2). 128 chars."),
+    ] = None,
+    ts: Annotated[
+        int | None,
+        Form(description="Unix timestamp the client used when signing (LC2)."),
+    ] = None,
 ) -> dict[str, Any]:
-    """Upload a file to the given cloud. Increments user's storage_used_bytes
-    on success; rejects with 413 if over quota. Pre-flight check uses the
-    HTTP Content-Length when available; final check is at temp-file size."""
+    """Upload a file. Two modes:
+
+    **LC2 (client-signed) — recommended**: caller supplies `client_sha256`,
+    `signature`, `ts`. Server verifies sig over `sha256 || ts(8B BE) ||
+    pubkey` against the user's stored pubkey. Caption written to TG is
+    `LC2:{"o","h","s","t"}`. The server NEVER sees the user's privkey.
+
+    **LC1 (legacy server-signed)**: if any of the three fields is omitted,
+    server falls back to V1 admin-key signing. Use for clients that can't
+    do crypto (e.g. ad-hoc curl). Caption is `LC1:{...}` with admin sig.
+
+    Quota: pre-flight check after sha256 is known (rejects 413 before TG
+    upload). Increments `users.storage_used_bytes` on success.
+    """
     await _ensure_userbot_authorized(manager)
     cloud = await _get_cloud_for_user(cloud_id, user.id, role=user.role)
     settings = get_settings()
-    sk, _ = ensure_admin_keypair(settings)
     pool = get_worker_pool()
 
-    # Stream to disk first so we know the real size for quota check
+    # Stream to disk first so we know real size + sha256 for verification
     tmp_path, size, sha = await _stream_to_temp(
         file, settings.data_dir / "tmp", settings.lc_max_file_bytes
     )
 
-    # Quota check (HTTP 413 if would exceed)
     try:
         await assert_can_store(user.id, size)
     except HTTPException:
@@ -196,48 +222,131 @@ async def upload_file(
             tmp_path.unlink()
         raise
 
-    try:
-        result: UploadResult = await pool.submit(
-            upload_file_to_cloud(
-                manager.client,
-                chat_id=cloud.chat_id,
-                file_path=tmp_path,
-                original_name=file.filename or f"file-{uuid.uuid4().hex}",
-                sha256_digest=sha,
-                signing_key=sk,
-            )
-        )
-    except Exception as exc:
-        logger.exception("upload to Telegram failed: %s", exc)
-        with contextlib.suppress(FileNotFoundError):
-            tmp_path.unlink()
-        raise HTTPException(
-            502, detail={"reason": "telegram_upload_failed", "error": str(exc)}
-        ) from None
-    else:
-        with contextlib.suppress(FileNotFoundError):
-            tmp_path.unlink()
+    use_lc2 = (
+        client_sha256 is not None and signature is not None and ts is not None
+    )
 
-    # Persist file row + bump quota in one transaction-ish block
+    if use_lc2:
+        # Validate hex shapes
+        try:
+            client_sha = bytes.fromhex(client_sha256 or "")
+            sig_bytes = bytes.fromhex(signature or "")
+        except ValueError:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise HTTPException(
+                400, detail={"reason": "lc2_bad_hex"}
+            ) from None
+
+        # 1. Server-computed SHA-256 must match what client signed
+        if client_sha != sha:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise HTTPException(
+                400,
+                detail={
+                    "reason": "lc2_sha256_mismatch",
+                    "server": sha.hex(),
+                    "client": client_sha.hex(),
+                },
+            )
+        # 2. Verify Ed25519 sig against THIS user's pubkey
+        ok, why = verify_lc2_payload(
+            pubkey=user.pubkey,
+            sha256=sha,
+            signature=sig_bytes,
+            ts=int(ts or 0),
+        )
+        if not ok:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise HTTPException(
+                400, detail={"reason": "lc2_verify_failed", "why": why}
+            )
+
+        payload = Lc2Payload(
+            pubkey=user.pubkey,
+            sha256=sha,
+            signature=sig_bytes,
+            ts=int(ts or 0),
+        )
+        try:
+            lc2_result: Lc2UploadResult = await pool.submit(
+                upload_file_lc2(
+                    manager.client,
+                    chat_id=cloud.chat_id,
+                    file_path=tmp_path,
+                    original_name=file.filename or f"file-{uuid.uuid4().hex}",
+                    payload=payload,
+                )
+            )
+        except Exception as exc:
+            logger.exception("LC2 upload to Telegram failed")
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise HTTPException(
+                502,
+                detail={"reason": "telegram_upload_failed", "error": str(exc)},
+            ) from None
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+
+        message_id = lc2_result.message_id
+        stored_signature = sig_bytes
+        uploaded_at_unix = payload.ts
+    else:
+        # Legacy LC1 path (admin server-signed)
+        sk, _ = ensure_admin_keypair(settings)
+        try:
+            result: UploadResult = await pool.submit(
+                upload_file_to_cloud(
+                    manager.client,
+                    chat_id=cloud.chat_id,
+                    file_path=tmp_path,
+                    original_name=file.filename or f"file-{uuid.uuid4().hex}",
+                    sha256_digest=sha,
+                    signing_key=sk,
+                )
+            )
+        except Exception as exc:
+            logger.exception("LC1 upload to Telegram failed")
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise HTTPException(
+                502,
+                detail={"reason": "telegram_upload_failed", "error": str(exc)},
+            ) from None
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+
+        message_id = result.message_id
+        stored_signature = result.signature
+        uploaded_at_unix = result.uploaded_at_unix
+
     sm = get_sessionmaker()
     async with sm() as sess:
         row = File(
             cloud_id=cloud.id,
-            message_id=result.message_id,
-            owner_id=cloud.owner_id,  # admin (TG-side signer)
-            owner_user_id=user.id,  # logical owner
+            message_id=message_id,
+            owner_id=cloud.owner_id,
+            owner_user_id=user.id,
             original_name=file.filename or f"file-{uuid.uuid4().hex}",
             mime=file.content_type or "application/octet-stream",
             size_bytes=size,
             sha256=sha,
-            signature=result.signature,
+            signature=stored_signature,
         )
         sess.add(row)
         await sess.commit()
         await sess.refresh(row)
 
     await increment_used(user.id, size)
-    return _serialize(row)
+    out = _serialize(row)
+    out["caption_kind"] = "LC2" if use_lc2 else "LC1"
+    out["uploaded_at_unix"] = uploaded_at_unix
+    return out
 
 
 # ------------------------------------------------------------------ download

@@ -370,3 +370,138 @@ def test_quota_endpoint_returns_zero_for_new_user(
     assert r.status_code == 200
     assert r.json()["used_bytes"] == 0
     assert r.json()["quota_bytes"] >= 1024**3
+
+
+
+# -------------------------------------------------------------- LC2 client signing
+
+
+def test_upload_with_lc2_client_signature_succeeds(
+    app_with_userbot: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Client signs sha256||ts||pubkey, server verifies and writes LC2 caption."""
+    import hashlib
+    import time
+
+    from lcloud.crypto.lc2 import canonical_payload
+    from lcloud.userbot.files_lc2 import Lc2UploadResult
+
+    next_msg = [5000]
+
+    async def fake_upload_lc2(client: Any, *, chat_id: int, file_path: Any, original_name: str, payload: Any) -> Lc2UploadResult:
+        next_msg[0] += 1
+        return Lc2UploadResult(
+            message_id=next_msg[0],
+            caption=payload.to_caption(),
+            payload=payload,
+        )
+
+    import lcloud.api.v2_files as v2_files_mod
+    monkeypatch.setattr(v2_files_mod, "upload_file_lc2", fake_upload_lc2)
+
+    _login_admin_telegram(app_with_userbot)
+    _, sk = _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    payload_bytes = b"hello LC2 world" * 5
+    sha256 = hashlib.sha256(payload_bytes).digest()
+    ts = int(time.time())
+    pub = bytes(sk.verify_key)
+    sig = sk.sign(canonical_payload(sha256=sha256, ts=ts, pubkey=pub)).signature
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("a.bin", io.BytesIO(payload_bytes), "application/octet-stream")},
+        data={
+            "client_sha256": sha256.hex(),
+            "signature": sig.hex(),
+            "ts": str(ts),
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["caption_kind"] == "LC2"
+    assert body["size"] == len(payload_bytes)
+
+
+def test_upload_with_lc2_wrong_sha_rejected(app_with_userbot: TestClient) -> None:
+    """Client claims a sha256 that doesn't match the file → 400."""
+    import hashlib
+    import time
+
+    from lcloud.crypto.lc2 import canonical_payload
+
+    _login_admin_telegram(app_with_userbot)
+    _, sk = _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    payload_bytes = b"actual content"
+    fake_sha = hashlib.sha256(b"different content").digest()
+    ts = int(time.time())
+    pub = bytes(sk.verify_key)
+    sig = sk.sign(canonical_payload(sha256=fake_sha, ts=ts, pubkey=pub)).signature
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("x.bin", io.BytesIO(payload_bytes), "application/octet-stream")},
+        data={
+            "client_sha256": fake_sha.hex(),
+            "signature": sig.hex(),
+            "ts": str(ts),
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["reason"] == "lc2_sha256_mismatch"
+
+
+def test_upload_with_lc2_bad_signature_rejected(
+    app_with_userbot: TestClient,
+) -> None:
+    """Wrong key signs the payload → server rejects."""
+    import hashlib
+    import time
+
+    from lcloud.auth.seed import derive_keypair, generate_mnemonic
+    from lcloud.crypto.lc2 import canonical_payload
+
+    _login_admin_telegram(app_with_userbot)
+    _, sk = _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    # OTHER user's keypair
+    other_ident = derive_keypair(generate_mnemonic(12))
+    other_sk = SigningKey(other_ident.privkey_seed)
+
+    payload = b"some bytes"
+    sha = hashlib.sha256(payload).digest()
+    ts = int(time.time())
+    pub = bytes(sk.verify_key)
+    bad_sig = other_sk.sign(canonical_payload(sha256=sha, ts=ts, pubkey=pub)).signature
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("x.bin", io.BytesIO(payload), "application/octet-stream")},
+        data={
+            "client_sha256": sha.hex(),
+            "signature": bad_sig.hex(),
+            "ts": str(ts),
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["reason"] == "lc2_verify_failed"
+
+
+def test_upload_falls_back_to_lc1_when_no_signature(
+    app_with_userbot: TestClient,
+) -> None:
+    """No client_sha256/signature/ts → server signs with admin key (LC1)."""
+    _login_admin_telegram(app_with_userbot)
+    _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("legacy.txt", io.BytesIO(b"legacy"), "text/plain")},
+    )
+    assert r.status_code == 201
+    assert r.json()["caption_kind"] == "LC1"
