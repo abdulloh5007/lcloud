@@ -35,6 +35,9 @@ from lcloud.api import (
     magic_router,
     search_router,
     tags_router,
+    v2_clouds_files_router,
+    v2_clouds_router,
+    v2_files_router,
 )
 from lcloud.auth.jwt_utils import ensure_jwt_secret
 from lcloud.config import get_settings
@@ -174,6 +177,9 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(auth_v2_router)
     app.include_router(api_keys_router)
+    app.include_router(v2_clouds_router)
+    app.include_router(v2_clouds_files_router)
+    app.include_router(v2_files_router)
     app.include_router(clouds_router)
     app.include_router(clouds_files_router)
     app.include_router(files_router)

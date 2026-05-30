@@ -11,6 +11,13 @@ from lcloud.api.files import (
 from lcloud.api.magic import router as magic_router
 from lcloud.api.search import router as search_router
 from lcloud.api.tags import file_tags_router, tags_router
+from lcloud.api.v2_clouds import router as v2_clouds_router
+from lcloud.api.v2_files import (
+    clouds_files_router as v2_clouds_files_router,
+)
+from lcloud.api.v2_files import (
+    files_router as v2_files_router,
+)
 
 __all__ = [
     "api_keys_router",
@@ -23,4 +30,7 @@ __all__ = [
     "magic_router",
     "search_router",
     "tags_router",
+    "v2_clouds_files_router",
+    "v2_clouds_router",
+    "v2_files_router",
 ]
