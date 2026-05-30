@@ -45,7 +45,7 @@ export function LoginScreen({
           <>
             <p className="text-sm text-zinc-500 mb-4">
               {bootstrapMode
-                ? 'Подключите ваш Telegram-аккаунт. После подключения юзербот пришлёт вам сид-фразу администратора в Saved Messages.'
+                ? 'Подключите ваш Telegram-аккаунт. После подключения юзербот пришлёт вам сид-фразу в Saved Messages.'
                 : 'Юзербот не авторизован — войдите своим Telegram-аккаунтом.'}
             </p>
             <BootstrapAdminTGForm onAuthorized={onAdminConnected} />

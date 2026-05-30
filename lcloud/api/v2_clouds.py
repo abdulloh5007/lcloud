@@ -75,7 +75,7 @@ async def _admin_owner_id() -> int:
     summary="Список ваших облаков",
     description=(
         "Возвращает все cloud-ы (TG-супергруппы), которые принадлежат вам. "
-        "Admin видит все cloud-ы всех пользователей. Сортировка: новые сверху."
+        "Сортировка: новые сверху."
     ),
 )
 async def list_clouds(user: CurrentUser) -> list[dict[str, Any]]:
@@ -94,9 +94,8 @@ async def list_clouds(user: CurrentUser) -> list[dict[str, Any]]:
     status_code=201,
     summary="Создать новый cloud",
     description=(
-        "Создаёт новую TG-супергруппу под управлением админ-аккаунта (юзербот). "
-        "DB-запись `clouds` помечается owner_user_id=ваш_id. "
-        "Только владелец видит свой cloud в списке (admin видит все)."
+        "Создаёт новую TG-супергруппу. DB-запись `clouds` помечается "
+        "owner_user_id=ваш_id. Только владелец видит свой cloud в списке."
     ),
 )
 async def create_cloud(

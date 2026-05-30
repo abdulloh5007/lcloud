@@ -39,6 +39,8 @@ from lcloud.api import (
     v2_clouds_router,
     v2_files_router,
 )
+from lcloud.api.docs import router as docs_router
+from lcloud.api.docs import serve_openapi
 from lcloud.auth.jwt_utils import ensure_jwt_secret
 from lcloud.config import get_settings
 from lcloud.crypto.keys import ensure_admin_keypair
@@ -175,13 +177,13 @@ APP_DESCRIPTION = """
 
 ## Архитектура коротко
 
-- **V1 (admin web)**: phone+code login, единственный admin = владелец TG-аккаунта,
-  использует `lc_session` cookie. Сохранён для совместимости / bootstrap.
-- **V2 (multi-user, рекомендуется)**: BIP39 seed-phrase → Ed25519 keypair.
-  Регистрация и вход — challenge-response с подписью на стороне клиента.
-  API-ключи `lc-XXXXXXXXXXXXXX` (17 chars) для программного доступа.
+- **Регистрация / вход**: BIP39 seed-phrase → Ed25519 keypair.
+  Challenge-response с подписью на стороне клиента.
+  Сервер никогда не видит ваш приватный ключ.
+- **API-ключи**: `lc-XXXXXXXXXXXXXX` (17 chars) для программного доступа.
 - **Файлы**: подписываются клиентом (LC2 caption) с использованием Ed25519.
-  Сервер никогда не видит приватные ключи.
+- **Lifecycle telegram session**: первое подключение — phone+code, далее
+  работа автоматическая.
 
 ## Аутентификация
 
@@ -189,40 +191,33 @@ APP_DESCRIPTION = """
 |---|---|---|
 | Cookie `lc_user_session` | автоматически в браузере | Веб-UI |
 | `Authorization: Bearer lc-XXXXXXXXXXXXXX` | вручную | API-клиенты |
-| Cookie `lc_session` (V1) | автоматически | Только admin web (legacy) |
 
 Получить **API-ключ**: войдите в веб-UI → ⚙️ → API-ключи → «Создать ключ».
 Ключ показывается **один раз**, сохраните сразу.
 
 ## Как зарегистрироваться
 
-1. Откройте `/`. Если юзербот ещё не подключён — введите телефон + код
-   Telegram (это разовая операция владельца сервера).
-2. После подключения юзербот пришлёт админу 12 слов в Saved Messages.
+1. Откройте `/`. Если это первый запуск сервера — операторская связка
+   юзербота с Telegram-аккаунтом (phone + code, разовая операция).
+2. После подключения юзербот пришлёт оператору 12 слов в Saved Messages.
 3. На странице «Войти по сид-фразе» вставьте 12 слов → готово.
-4. Для нового аккаунта (не-admin): «Создать новый аккаунт» → 12 слов
-   сгенерируются → сохраните → вход автоматический.
+4. Для нового аккаунта: «Создать новый аккаунт» → 12 слов сгенерируются
+   → сохраните → вход автоматический.
 
 ## Лимиты
 
 - Размер файла: 1 GiB по умолчанию (`LC_MAX_FILE_BYTES`)
-- Quota по умолчанию: 5 GiB на пользователя, 1 TiB у admin
+- Quota по умолчанию: 5 GiB на пользователя
 - API rate-limit: 10 verify/challenge запросов / 5 минут / IP
 - API-ключей: до 25 активных на пользователя
-
-## Open issues / V3 plans
-
-- Public REST API с granular scopes на ключах
-- Тарифы (free / paid)
-- Client-side encryption файлов (real E2E)
 """
 
 TAGS_METADATA = [
     {
         "name": "auth_v2",
         "description": (
-            "**V2 auth** — BIP39 seed-phrase login. Клиент держит приватный "
-            "ключ, сервер видит только публичный. Регистрация автоматическая "
+            "**BIP39 seed-phrase login**. Клиент держит приватный ключ, "
+            "сервер видит только публичный. Регистрация автоматическая "
             "при первом /verify."
         ),
     },
@@ -236,9 +231,8 @@ TAGS_METADATA = [
     {
         "name": "v2_clouds",
         "description": (
-            "Per-user clouds. Cloud = супергруппа в Telegram-аккаунте админа, "
-            "помеченная LCLOUD1-маркером. Только владелец видит свои clouds; "
-            "admin видит все."
+            "Per-user clouds. Cloud = супергруппа в Telegram, помеченная "
+            "LCLOUD1-маркером. Каждый пользователь видит только свои clouds."
         ),
     },
     {
@@ -252,21 +246,12 @@ TAGS_METADATA = [
     {
         "name": "auth",
         "description": (
-            "**V1 admin auth** (legacy) — phone+code Telegram login. "
+            "Phone+code Telegram login (legacy). "
             "Используется только для первого подключения юзербота."
         ),
     },
-    {
-        "name": "clouds",
-        "description": "V1 admin-only clouds endpoints (legacy).",
-    },
-    {
-        "name": "files",
-        "description": "V1 admin-only files endpoints (legacy).",
-    },
-    {"name": "tags", "description": "Тэги для файлов (admin-only пока)."},
+    {"name": "tags", "description": "Тэги для файлов."},
     {"name": "search", "description": "Полнотекстовый поиск по файлам."},
-    {"name": "magic", "description": "Magic-link login для admin (legacy)."},
 ]
 
 
@@ -281,22 +266,34 @@ def create_app() -> FastAPI:
             "name": "LCloud",
             "url": "https://github.com/mramziddin1228-gif/LCloud",
         },
+        # Disable defaults — we replace them below with custom mobile-friendly
+        # /docs, /redoc, and /openapi.json (the last one served with explicit
+        # `application/json; charset=utf-8` for browsers that strict-parse).
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
+    # Custom mobile-responsive /docs and /redoc + UTF-8 openapi.json
+    app.include_router(docs_router)
+    serve_openapi(app)
+
     app.include_router(auth_router)
     app.include_router(auth_v2_router)
     app.include_router(api_keys_router)
     app.include_router(v2_clouds_router)
     app.include_router(v2_clouds_files_router)
     app.include_router(v2_files_router)
-    app.include_router(clouds_router)
-    app.include_router(clouds_files_router)
-    app.include_router(files_router)
+    # V1 legacy endpoints — hidden from Swagger (used by built-in admin
+    # bootstrap flow but not part of the public API surface).
+    app.include_router(clouds_router, include_in_schema=False)
+    app.include_router(clouds_files_router, include_in_schema=False)
+    app.include_router(files_router, include_in_schema=False)
     app.include_router(tags_router)
     app.include_router(file_tags_router)
     app.include_router(search_router)
     # Magic-link endpoint must be registered BEFORE the SPA fallback so that
     # `GET /admin?token=…` doesn't get caught by the catch-all `/{full_path}`.
-    app.include_router(magic_router)
+    app.include_router(magic_router, include_in_schema=False)
 
     @app.get("/health")
     async def health() -> JSONResponse:

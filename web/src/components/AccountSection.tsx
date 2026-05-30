@@ -40,17 +40,6 @@ export function AccountSection({ me, onLogout }: Props) {
       <div>
         <h3 className="font-medium mb-2">Идентичность</h3>
         <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 text-sm">
-          <Row label="Роль">
-            <span
-              className={
-                me.role === 'admin'
-                  ? 'text-amber-600 dark:text-amber-400 font-medium'
-                  : ''
-              }
-            >
-              {me.role === 'admin' ? '👑 admin' : 'user'}
-            </span>
-          </Row>
           <Row label="ID">{me.user_id}</Row>
           <Row label="Pubkey">
             <code className="font-mono text-xs">{fingerprint}…</code>

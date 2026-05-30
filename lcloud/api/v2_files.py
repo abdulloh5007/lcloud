@@ -1,8 +1,8 @@
 """V2 per-user files endpoints (under /api/v1/files and /api/v1/clouds/{id}/files).
 
-Per-user scoping via `files.owner_user_id`. TG-side operations still use
-the bootstrap admin's account (single Telethon session) but logical
-ownership and quota accounting belong to the calling V2 user.
+Per-user scoping via `files.owner_user_id`. TG-side operations use the
+single connected Telethon session; logical ownership and quota
+accounting belong to the calling V2 user.
 
 Round 5b scope: client-side LC2 caption signing.
 - Upload requires three optional-but-recommended fields:
@@ -198,9 +198,10 @@ async def upload_file(
     pubkey` against the user's stored pubkey. Caption written to TG is
     `LC2:{"o","h","s","t"}`. The server NEVER sees the user's privkey.
 
-    **LC1 (legacy server-signed)**: if any of the three fields is omitted,
-    server falls back to V1 admin-key signing. Use for clients that can't
-    do crypto (e.g. ad-hoc curl). Caption is `LC1:{...}` with admin sig.
+    **LC1 (legacy)**: if any of the three fields is omitted, server
+    falls back to server-side signing with its built-in key. Use for
+    clients that can't do crypto (e.g. ad-hoc curl). Caption is
+    `LC1:{...}`.
 
     Quota: pre-flight check after sha256 is known (rejects 413 before TG
     upload). Increments `users.storage_used_bytes` on success.

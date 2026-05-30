@@ -169,7 +169,7 @@ function humanizeApiError(e: unknown): string {
     if (reason === 'wrong_code') return 'Неверный код.'
     if (reason === 'wrong_password') return 'Неверный пароль.'
     if (reason === 'phone_invalid') return 'Неверный формат номера.'
-    if (reason === 'wrong_account') return 'Этот аккаунт не админский.'
+    if (reason === 'wrong_account') return 'Этот аккаунт не подходит — нужен исходный.'
     if (reason === 'expired') return 'Код истёк, начните заново.'
   }
   return (e as Error).message ?? 'Ошибка'

@@ -123,17 +123,14 @@ async def auth_state(
     manager: UserbotManager = Depends(get_userbot_manager),
     lc_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    """Combined auth state for the SPA.
+    """Combined auth state for the SPA bootstrap step.
 
     Returns:
-        authorized       — *real* auth = cookie present, valid, current
-                           epoch, AND userbot is admin-authorized at TG.
-                           This is what the UI keys off.
-        userbot_authed   — telethon session itself is admin-authorized
-                           (true even when the user has no cookie).
-        bootstrap_mode   — no admin tg_id has been claimed yet; first
-                           login wins, phone+code form should be shown.
-        userbot_started  — telethon client is connected at all.
+        authorized       — Cookie present, valid, epoch matches, and
+                           the userbot is connected to the right TG account.
+        userbot_authed   — Telethon session is connected.
+        bootstrap_mode   — No TG account has been claimed yet by the userbot.
+        userbot_started  — Telethon client has begun connecting.
     """
     snap = await manager.snapshot()
     settings = get_settings()
