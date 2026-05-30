@@ -9,12 +9,14 @@ import {
   useTheme,
   useVideoQuality,
 } from "./hooks/useAuth";
+import { useAuthV2 } from "./hooks/useAuthV2";
 import { auth } from "./api/client";
 import { Button } from "./components/ui/Button";
 import { Moon, Sun, LogOut, Menu } from "lucide-react";
 
 export function App() {
-  const { data, isLoading, isAdmin, refresh } = useAuth();
+  const { data, isLoading, refresh } = useAuth();
+  const v2 = useAuthV2();
   const [selectedCloud, setSelectedCloud] = useState<number | null>(null);
   const [dark, setDark] = useTheme();
   const [imageQuality, setImageQuality] = useImageQuality();
@@ -22,7 +24,7 @@ export function App() {
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  if (isLoading) {
+  if (isLoading || v2.isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-sm text-neutral-500">
         …
@@ -30,12 +32,18 @@ export function App() {
     );
   }
 
-  if (!isAdmin) {
+  // Sign-in gate: V2 cookie session is the source of truth for "logged in".
+  // V1 (auth/state) tells us whether the userbot itself is connected to TG.
+  if (!v2.isAuthenticated) {
     return (
       <LoginScreen
         bootstrapMode={data?.bootstrap_mode ?? true}
         userbotAuthed={data?.userbot_authed ?? false}
-        onAuthorized={() => void refresh()}
+        onSignedIn={(kp) => {
+          v2.setKeypair(kp);
+          void v2.refresh();
+        }}
+        onAdminConnected={() => void refresh()}
       />
     );
   }
@@ -76,12 +84,13 @@ export function App() {
             variant="ghost"
             size="sm"
             onClick={async () => {
+              await v2.logout();
               await auth.logout();
               void refresh();
             }}
           >
             <LogOut size={14} />
-            <span className="hidden sm:inline">Logout</span>
+            <span className="hidden sm:inline">Выйти</span>
           </Button>
         </div>
       </header>
