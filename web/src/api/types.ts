@@ -33,6 +33,10 @@ export interface FileRow {
   size: number;
   uploaded_at: string | null;
   deleted_at: string | null;
+  /** V2 only: which caption format the file was uploaded with. */
+  caption_kind?: "LC1" | "LC2";
+  /** V2 only: pubkey of the V2 user who owns this row, NULL for legacy admin. */
+  owner_user_id?: number | null;
 }
 
 export interface TagRow {

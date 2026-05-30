@@ -500,8 +500,29 @@ function FileGridCard({
         </div>
       )}
       <div className="min-w-0">
-        <div className="text-sm font-medium truncate" title={file.name}>
-          {file.name}
+        <div className="flex items-center gap-1.5 min-w-0">
+          {file.caption_kind === "LC2" && (
+            <span
+              title="Подписан клиентом (LC2)"
+              className="text-xs px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400 font-mono shrink-0"
+            >
+              🔐 LC2
+            </span>
+          )}
+          {file.caption_kind === "LC1" && (
+            <span
+              title="Подписан сервером (legacy LC1)"
+              className="text-xs px-1 py-0.5 rounded bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 font-mono shrink-0"
+            >
+              LC1
+            </span>
+          )}
+          <div
+            className="text-sm font-medium truncate min-w-0"
+            title={file.name}
+          >
+            {file.name}
+          </div>
         </div>
         <div className="text-xs text-neutral-500 tabular-nums">
           {formatBytes(file.size)}

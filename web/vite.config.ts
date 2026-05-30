@@ -33,5 +33,27 @@ export default defineConfig({
     outDir: "dist",
     sourcemap: false,
     chunkSizeWarningLimit: 1024,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Crypto libs are only needed once on login + on each upload.
+          // Splitting them off keeps the main app shell smaller.
+          crypto: [
+            "@scure/bip39",
+            "@scure/bip39/wordlists/english",
+            "@noble/ed25519",
+            "@noble/hashes/sha512",
+            "@noble/hashes/sha256",
+          ],
+          // React + react-query + lucide are stable vendor code.
+          vendor: [
+            "react",
+            "react-dom",
+            "@tanstack/react-query",
+            "lucide-react",
+          ],
+        },
+      },
+    },
   },
 });
