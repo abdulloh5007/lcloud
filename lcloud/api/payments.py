@@ -39,6 +39,7 @@ from lcloud.auth.seed import derive_keypair, generate_mnemonic
 from lcloud.auth.v2_deps import CurrentUserAdmin
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import PaymentRequest, User
+from lcloud.metrics import payment_decisions_counter, payment_requests_counter
 from lcloud.utils.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -142,12 +143,11 @@ async def submit_request(
     body: PaymentRequestIn, request: Request
 ) -> dict[str, Any]:
     if not _pay_rate.try_acquire(_client_ip(request)):
+        payment_requests_counter.labels(outcome="rate_limited").inc()
         raise HTTPException(429, detail={"reason": "rate_limited"})
 
     sm = get_sessionmaker()
     async with sm() as sess:
-        # If there's already a pending request for this handle, return it
-        # (idempotent re-submit). Otherwise create a new one.
         existing = (
             await sess.execute(
                 sa.select(PaymentRequest).where(
@@ -157,6 +157,7 @@ async def submit_request(
             )
         ).scalar_one_or_none()
         if existing is not None:
+            payment_requests_counter.labels(outcome="duplicate").inc()
             logger.info(
                 "duplicate pending payment request from %s (id=%d)",
                 body.contact_handle,
@@ -178,6 +179,7 @@ async def submit_request(
         sess.add(req)
         await sess.commit()
         await sess.refresh(req)
+        payment_requests_counter.labels(outcome="submitted").inc()
         logger.info(
             "new payment request id=%d contact=%s ip=%s",
             req.id,
@@ -296,6 +298,7 @@ async def approve_request(
         req.approved_at = datetime.now(UTC)
         req.generated_user_id = user.id
         await sess.commit()
+        payment_decisions_counter.labels(decision="approved").inc()
         logger.info(
             "approved payment request id=%d → user_id=%d contact=%s admin=%d",
             req.id,
@@ -342,6 +345,7 @@ async def reject_request(
         if body.reason:
             req.note = (req.note or "") + f"\n[reject reason: {body.reason}]"
         await sess.commit()
+        payment_decisions_counter.labels(decision="rejected").inc()
         logger.info(
             "rejected payment request id=%d admin=%d reason=%s",
             req.id,

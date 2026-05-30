@@ -283,7 +283,53 @@ export const payments = {
     ),
 };
 
-// ---------------------------------------------------------------- pin recovery
+// ---------------------------------------------------------------- shares
+
+export interface FileShare {
+  id: number;
+  file_id: number;
+  token: string;
+  url?: string;
+  created_at: string | null;
+  expires_at: string | null;
+  max_downloads: number | null;
+  download_count: number;
+  revoked_at: string | null;
+  active: boolean;
+}
+
+export const shares = {
+  create: (
+    fileId: number,
+    opts: { expires_in_seconds?: number; max_downloads?: number } = {},
+  ) =>
+    api<FileShare>(`/api/v1/files/${fileId}/shares`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
+  listForFile: (fileId: number) =>
+    api<FileShare[]>(`/api/v1/files/${fileId}/shares`),
+  revoke: (shareId: number) =>
+    api<void>(`/api/v1/shares/${shareId}`, { method: "DELETE" }),
+};
+
+// ---------------------------------------------------------------- versions
+
+export interface FileVersion {
+  id: number;
+  original_name: string;
+  size_bytes: number;
+  mime: string;
+  uploaded_at: string | null;
+  deleted_at: string | null;
+  replaces_file_id: number | null;
+  compressed: boolean;
+}
+
+export const versions = {
+  list: (fileId: number) =>
+    api<FileVersion[]>(`/api/v1/files/${fileId}/versions`),
+};
 
 export const pinApi = {
   /** Setup PIN (authenticated). Browser holds mnemonic in memory only. */

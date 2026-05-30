@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from lcloud.auth.v2_deps import CurrentUser
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, File, FileShare
+from lcloud.metrics import share_downloads_counter
 from lcloud.userbot.client import UserbotManager, get_userbot_manager
 from lcloud.userbot.files import iter_download_file
 
@@ -243,6 +244,8 @@ async def public_download(
 
     if not manager.is_started or not await manager.is_admin_authorized():
         raise HTTPException(503, detail={"reason": "userbot_not_authorized"})
+
+    share_downloads_counter.inc()
 
     headers = {
         "Content-Disposition": f'attachment; filename="{f.original_name}"',

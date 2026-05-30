@@ -42,6 +42,7 @@ from lcloud.auth.seed import derive_keypair, is_valid_mnemonic
 from lcloud.cache import cache, k_user_me
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import User
+from lcloud.metrics import pin_attempts_counter
 from lcloud.utils.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,7 @@ async def recover_seed(
     body: RecoverIn, request: Request
 ) -> dict[str, str]:
     if not _recover_rate.try_acquire(_client_ip(request)):
+        pin_attempts_counter.labels(outcome="rate_limited").inc()
         raise HTTPException(429, detail={"reason": "rate_limited"})
 
     if not pin.is_valid_pin(body.pin):
@@ -186,29 +188,29 @@ async def recover_seed(
                 sa.select(User).where(User.contact_handle == body.contact_handle)
             )
         ).scalar_one_or_none()
-        # We don't reveal whether the contact exists — generic 'not_found'
         if user is None or user.pin_hash is None or user.encrypted_seed is None:
+            pin_attempts_counter.labels(outcome="not_found").inc()
             raise HTTPException(404, detail={"reason": "not_found"})
 
         # Lockout check
         now = datetime.now(UTC)
         locked_until = user.pin_locked_until
-        # SQLite returns naive datetimes even with timezone=True; assume UTC
         if locked_until is not None and locked_until.tzinfo is None:
             locked_until = locked_until.replace(tzinfo=UTC)
         if locked_until is not None and locked_until > now:
             secs_left = int((locked_until - now).total_seconds())
+            pin_attempts_counter.labels(outcome="locked").inc()
             raise HTTPException(
                 403,
                 detail={"reason": "locked", "retry_after_seconds": secs_left},
             )
 
-        # PIN verify (slow, constant-time)
         if not pin.verify_pin(body.pin, user.pin_hash):
             user.pin_failed_attempts = (user.pin_failed_attempts or 0) + 1
             if user.pin_failed_attempts >= pin.MAX_FAILED_ATTEMPTS:
                 user.pin_locked_until = now + timedelta(seconds=pin.LOCKOUT_SECONDS)
                 await sess.commit()
+                pin_attempts_counter.labels(outcome="locked").inc()
                 raise HTTPException(
                     403,
                     detail={
@@ -217,24 +219,24 @@ async def recover_seed(
                     },
                 )
             await sess.commit()
+            pin_attempts_counter.labels(outcome="wrong").inc()
             attempts_left = pin.MAX_FAILED_ATTEMPTS - user.pin_failed_attempts
             raise HTTPException(
                 401,
                 detail={"reason": "wrong_pin", "attempts_left": attempts_left},
             )
 
-        # On success: reset counters and decrypt
         if user.seed_salt is None:
             raise HTTPException(404, detail={"reason": "not_found"})
 
         seed = pin.decrypt_seed(body.pin, user.seed_salt, user.encrypted_seed)
         if seed is None:
-            # Should never happen if pin_hash matched — but defensively
             raise HTTPException(500, detail={"reason": "decrypt_failed"})
 
         user.pin_failed_attempts = 0
         user.pin_locked_until = None
         await sess.commit()
+        pin_attempts_counter.labels(outcome="ok").inc()
         logger.info(
             "user_id=%d successfully recovered seed phrase via PIN",
             user.id,

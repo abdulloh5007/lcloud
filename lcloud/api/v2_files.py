@@ -61,6 +61,7 @@ from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.crypto.lc2 import Lc2Payload, verify_lc2_payload
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, File
+from lcloud.metrics import uploaded_bytes_counter, uploads_counter
 from lcloud.userbot.client import UserbotManager, get_userbot_manager
 from lcloud.userbot.files import (
     UploadResult,
@@ -484,6 +485,16 @@ async def upload_file(
     await increment_used(user.id, final_size)
     await invalidate_user_quota(user.id)
     await invalidate_files_in_cloud(cloud.id)
+
+    # Metrics
+    mime_class = (final_mime.split("/")[0] if "/" in final_mime else "other")
+    uploads_counter.labels(
+        mime_class=mime_class,
+        compressed=str(was_compressed).lower(),
+        caption_kind=caption_kind,
+    ).inc()
+    uploaded_bytes_counter.inc(final_size)
+
     out = _serialize(row)
     out["caption_kind"] = caption_kind
     out["uploaded_at_unix"] = uploaded_at_unix

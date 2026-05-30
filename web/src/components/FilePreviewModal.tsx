@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, files as filesApi } from "@/api/client";
 import type { FileRow } from "@/api/types";
-import { Download, X, Pencil, Check } from "lucide-react";
+import { Download, X, Pencil, Check, Share2 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
 import { useIsMobile } from "@/hooks/useAuth";
 import { FileTagsBar } from "./Tags";
+import { FileVersionsSection } from "./FileVersionsSection";
+import { ShareFileModal } from "./ShareFileModal";
 import { formatBytes, formatDate } from "@/lib/format";
 
 interface Props {
@@ -34,6 +36,7 @@ function classify(mime: string): Kind {
 
 export function FilePreviewModal({ file, onClose, onRenamed }: Props) {
   const isMobile = useIsMobile();
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Rename UI state
   const [editing, setEditing] = useState(false);
@@ -144,6 +147,14 @@ export function FilePreviewModal({ file, onClose, onRenamed }: Props) {
             </div>
           </div>
 
+          <button
+            onClick={() => setShareOpen(true)}
+            className="ml-1 sm:ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-sm hover:bg-emerald-600"
+            aria-label="Поделиться"
+          >
+            <Share2 size={14} />
+            <span className="hidden sm:inline">Поделиться</span>
+          </button>
           <a
             href={filesApi.downloadUrl(file.id)}
             className="ml-1 sm:ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
@@ -178,6 +189,16 @@ export function FilePreviewModal({ file, onClose, onRenamed }: Props) {
           <div className="text-xs text-neutral-500 mb-2">Теги:</div>
           <FileTagsBar fileId={file.id} />
         </div>
+
+        <FileVersionsSection fileId={file.id} />
+
+        {shareOpen && (
+          <ShareFileModal
+            fileId={file.id}
+            fileName={file.name}
+            onClose={() => setShareOpen(false)}
+          />
+        )}
       </div>
 
       {/* On small screens, rename happens in a dedicated modal. */}
