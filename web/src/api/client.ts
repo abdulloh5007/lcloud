@@ -147,9 +147,13 @@ export const files = {
       total: number,
       phase: UploadPhase,
     ) => void,
+    opts: { compress?: boolean } = {},
   ): Promise<FileRow> => {
     const fd = new FormData();
     fd.append("file", file);
+    // Always send the compress flag so server uses our preference
+    // (true is already the server default but explicitness wins).
+    fd.append("compress", String(opts.compress ?? true));
 
     // If we have a V2 keypair → sign client-side (LC2 caption).
     const kp = readSessionKeypair();

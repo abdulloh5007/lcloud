@@ -9,7 +9,7 @@ import {
   files as filesApi,
   search as searchApi,
 } from "@/api/client";
-import type { FileRow, FilesPage, ThumbSize } from "@/api/types";
+import type { FileRow, FilesPage } from "@/api/types";
 import {
   Download,
   Trash2,
@@ -29,7 +29,8 @@ const PAGE_SIZE = 50;
 
 interface Props {
   cloudId: number | null;
-  quality: ThumbSize;
+  /** Whether new uploads should be compressed server-side. */
+  compressUploads: boolean;
 }
 
 function mimeIcon(mime: string) {
@@ -55,7 +56,7 @@ interface Page {
   offset: number;
 }
 
-export function FilesPanel({ cloudId, quality }: Props) {
+export function FilesPanel({ cloudId, compressUploads }: Props) {
   const qc = useQueryClient();
   const [view, setView] = useState<ViewMode>("grid");
   const [query, setQuery] = useState("");
@@ -169,12 +170,17 @@ export function FilesPanel({ cloudId, quality }: Props) {
         [key]: { name: f.name, loaded: 0, total: f.size, phase: "signing" },
       }));
       try {
-        await filesApi.upload(cloudId, f, (loaded, total, phase) => {
-          setProgress((p) => ({
-            ...p,
-            [key]: { name: f.name, loaded, total, phase },
-          }));
-        });
+        await filesApi.upload(
+          cloudId,
+          f,
+          (loaded, total, phase) => {
+            setProgress((p) => ({
+              ...p,
+              [key]: { name: f.name, loaded, total, phase },
+            }));
+          },
+          { compress: compressUploads }
+        );
         setProgress((p) => {
           const { [key]: _omit, ...rest } = p;
           return rest;
@@ -351,7 +357,6 @@ export function FilesPanel({ cloudId, quality }: Props) {
               <FileGridCard
                 key={f.id}
                 file={f}
-                quality={quality}
                 onOpen={() => setPreviewFile(f)}
                 onDelete={() => remove.mutate(f.id)}
               />
@@ -443,7 +448,6 @@ export function FilesPanel({ cloudId, quality }: Props) {
       {previewFile && (
         <FilePreviewModal
           file={previewFile}
-          quality={quality}
           onClose={() => setPreviewFile(null)}
           onRenamed={(updated) => {
             setPreviewFile(updated);
@@ -458,12 +462,10 @@ export function FilesPanel({ cloudId, quality }: Props) {
 
 function FileGridCard({
   file,
-  quality,
   onOpen,
   onDelete,
 }: {
   file: FileRow;
-  quality: ThumbSize;
   onOpen: () => void;
   onDelete: () => void;
 }) {
@@ -487,7 +489,7 @@ function FileGridCard({
           <img
             // For grid: cap at "med" — even if user prefers "high" the
             // grid thumbnails would otherwise blow bandwidth on long lists.
-            src={filesApi.thumbUrl(file.id, quality === "high" ? "med" : quality)}
+            src={filesApi.thumbUrl(file.id, "med")}
             alt={file.name}
             loading="lazy"
             decoding="async"

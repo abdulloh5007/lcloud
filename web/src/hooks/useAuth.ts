@@ -37,6 +37,19 @@ export function useTheme(): [boolean, (v: boolean) => void] {
   return [dark, setDark];
 }
 
+/** Compression preference: re-encode images at upload (default), or upload byte-for-byte. */
+export function useCompressUploads(): [boolean, (v: boolean) => void] {
+  const [v, setV] = useState<boolean>(() => {
+    const stored = localStorage.getItem("lc-compress-uploads");
+    // Default: compression ON (saves storage)
+    return stored === null ? true : stored === "true";
+  });
+  useEffect(() => {
+    localStorage.setItem("lc-compress-uploads", String(v));
+  }, [v]);
+  return [v, setV];
+}
+
 const QUALITY_KEY_IMAGE = "lc-quality-image";
 const QUALITY_KEY_VIDEO = "lc-quality-video";
 const VALID_QUALITIES: ThumbSize[] = ["low", "med", "high"];

@@ -1,18 +1,17 @@
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, files as filesApi } from "@/api/client";
-import type { FileRow, ThumbSize } from "@/api/types";
+import type { FileRow } from "@/api/types";
 import { Download, X, Pencil, Check } from "lucide-react";
 import { Button } from "./ui/Button";
 import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
 import { useIsMobile } from "@/hooks/useAuth";
 import { FileTagsBar } from "./Tags";
-import { formatBytes, formatDate, classNames } from "@/lib/format";
+import { formatBytes, formatDate } from "@/lib/format";
 
 interface Props {
   file: FileRow;
-  quality: ThumbSize;
   onClose: () => void;
   onRenamed: (updated: FileRow) => void;
 }
@@ -33,20 +32,8 @@ function classify(mime: string): Kind {
   return "other";
 }
 
-const SIZE_LABEL: Record<ThumbSize, string> = {
-  low: "Low",
-  med: "Med",
-  high: "HD",
-};
-
-export function FilePreviewModal({ file, quality, onClose, onRenamed }: Props) {
+export function FilePreviewModal({ file, onClose, onRenamed }: Props) {
   const isMobile = useIsMobile();
-
-  // Override quality just for this modal (defaults to global preference)
-  const [activeSize, setActiveSize] = useState<ThumbSize>(quality);
-  useEffect(() => {
-    setActiveSize(quality);
-  }, [quality, file.id]);
 
   // Rename UI state
   const [editing, setEditing] = useState(false);
@@ -75,11 +62,9 @@ export function FilePreviewModal({ file, quality, onClose, onRenamed }: Props) {
 
   const kind = classify(file.mime);
   // Image / video / pdf / text use the actual file or thumb (image only).
-  // For images: src is the thumb URL with the chosen size.
-  // For other kinds, "size" is meaningless — they always stream the original.
   const imageSrc =
     kind === "image"
-      ? filesApi.thumbUrl(file.id, activeSize)
+      ? filesApi.thumbUrl(file.id, "med")
       : filesApi.downloadUrl(file.id);
 
   return (
@@ -159,32 +144,6 @@ export function FilePreviewModal({ file, quality, onClose, onRenamed }: Props) {
             </div>
           </div>
 
-          {kind === "image" && (
-            <div
-              className="hidden sm:flex items-center rounded-lg border border-neutral-200 dark:border-neutral-700 text-xs"
-              role="radiogroup"
-              aria-label="Preview quality"
-            >
-              {(["low", "med", "high"] as ThumbSize[]).map((q, i, arr) => (
-                <button
-                  key={q}
-                  type="button"
-                  onClick={() => setActiveSize(q)}
-                  className={classNames(
-                    "px-2 py-1.5",
-                    i === 0 && "rounded-l-lg",
-                    i === arr.length - 1 && "rounded-r-lg",
-                    activeSize === q
-                      ? "bg-neutral-100 dark:bg-neutral-800 font-medium"
-                      : "hover:bg-neutral-50 dark:hover:bg-neutral-900",
-                  )}
-                >
-                  {SIZE_LABEL[q]}
-                </button>
-              ))}
-            </div>
-          )}
-
           <a
             href={filesApi.downloadUrl(file.id)}
             className="ml-1 sm:ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
@@ -210,7 +169,7 @@ export function FilePreviewModal({ file, quality, onClose, onRenamed }: Props) {
             fullUrl={filesApi.downloadUrl(file.id)}
             mime={file.mime}
             name={file.name}
-            isHighQuality={activeSize === "high"}
+            isHighQuality={true}
           />
         </div>
 

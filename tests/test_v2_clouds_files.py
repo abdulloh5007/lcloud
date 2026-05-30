@@ -49,7 +49,7 @@ def app_with_userbot(
     monkeypatch.setenv("TG_API_HASH", "x")
     monkeypatch.setenv("LC_ADMIN_TG_ID", "42")
     monkeypatch.setenv("LC_COOKIE_SECURE", "false")
-    monkeypatch.setenv("LC_MAX_FILE_BYTES", "10000")
+    monkeypatch.setenv("LC_MAX_FILE_BYTES", "10000000")  # 10 MB cap for tests
 
     from lcloud.api import auth_v2 as auth_v2_mod
     from lcloud.config import get_settings
@@ -505,3 +505,131 @@ def test_upload_falls_back_to_lc1_when_no_signature(
     )
     assert r.status_code == 201
     assert r.json()["caption_kind"] == "LC1"
+
+
+
+# -------------------------------------------------------------- compression
+
+
+def test_upload_default_compresses_jpeg(
+    app_with_userbot: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Image upload re-encodes by default, server stores compressed bytes."""
+    from PIL import Image
+    from lcloud.userbot.files import UploadResult
+
+    next_msg = [9000]
+    captured_size: dict[str, int] = {}
+
+    async def fake_upload(client, *, chat_id, file_path, original_name, sha256_digest, signing_key):
+        captured_size["bytes"] = file_path.stat().st_size
+        next_msg[0] += 1
+        return UploadResult(
+            message_id=next_msg[0],
+            caption="LC1:{}",
+            uploaded_at_unix=1700000000,
+            signature=b"\x00" * 64,
+        )
+
+    import lcloud.api.v2_files as v2_files_mod
+    monkeypatch.setattr(v2_files_mod, "upload_file_to_cloud", fake_upload)
+
+    _login_admin_telegram(app_with_userbot)
+    _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    # Make a high-quality JPEG buffer with random noise so it has substance
+    import secrets
+    sz = 1200
+    raw_pixels = bytearray(sz * sz * 3)
+    for i in range(0, len(raw_pixels), 4096):
+        raw_pixels[i:i + 4096] = secrets.token_bytes(min(4096, len(raw_pixels) - i))
+    img = Image.frombytes("RGB", (sz, sz), bytes(raw_pixels))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=98)
+    raw = buf.getvalue()
+    original_size = len(raw)
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("photo.jpg", io.BytesIO(raw), "image/jpeg")},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["compressed"] is True
+    assert body["size"] < original_size
+    assert body["original_size_bytes"] == original_size
+    assert body["compression_ratio"] < 1.0
+    # The bytes that landed in TG (captured by our fake) should be the compressed ones
+    assert captured_size["bytes"] == body["size"]
+
+
+def test_upload_compress_false_keeps_original(
+    app_with_userbot: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compress=false → bytes go to TG unchanged."""
+    from PIL import Image
+    from lcloud.userbot.files import UploadResult
+
+    next_msg = [9100]
+    captured_size: dict[str, int] = {}
+
+    async def fake_upload(client, *, chat_id, file_path, original_name, sha256_digest, signing_key):
+        captured_size["bytes"] = file_path.stat().st_size
+        next_msg[0] += 1
+        return UploadResult(
+            message_id=next_msg[0],
+            caption="LC1:{}",
+            uploaded_at_unix=1700000000,
+            signature=b"\x00" * 64,
+        )
+
+    import lcloud.api.v2_files as v2_files_mod
+    monkeypatch.setattr(v2_files_mod, "upload_file_to_cloud", fake_upload)
+
+    _login_admin_telegram(app_with_userbot)
+    _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    import secrets
+    sz = 1200
+    raw_pixels = bytearray(sz * sz * 3)
+    for i in range(0, len(raw_pixels), 4096):
+        raw_pixels[i:i + 4096] = secrets.token_bytes(min(4096, len(raw_pixels) - i))
+    img = Image.frombytes("RGB", (sz, sz), bytes(raw_pixels))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=98)
+    raw = buf.getvalue()
+    original_size = len(raw)
+
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("photo.jpg", io.BytesIO(raw), "image/jpeg")},
+        data={"compress": "false"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["compressed"] is False
+    assert body["size"] == original_size
+    assert body.get("original_size_bytes") is None
+    assert captured_size["bytes"] == original_size
+
+
+def test_upload_non_image_format_ignored_for_compression(
+    app_with_userbot: TestClient,
+) -> None:
+    """Text/binary files: compress flag is ignored, byte-for-byte upload."""
+    _login_admin_telegram(app_with_userbot)
+    _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    payload = b"plain text " * 10_000  # 110 KiB, big enough to exceed threshold
+    r = app_with_userbot.post(
+        f"/api/v1/clouds/{cloud_id}/files",
+        files={"file": ("doc.txt", io.BytesIO(payload), "text/plain")},
+        data={"compress": "true"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["compressed"] is False
+    assert body["size"] == len(payload)

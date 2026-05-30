@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -73,6 +74,14 @@ class File(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     signature: Mapped[bytes] = mapped_column(LargeBinary(64), nullable=False)
+    # V2: was the file re-encoded at upload time (lossy compression)?
+    compressed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # V2: original (pre-compression) size in bytes; NULL = same as size_bytes
+    original_size_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )

@@ -5,9 +5,8 @@ import { FilesPanel } from "./components/FilesPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import {
   useAuth,
-  useImageQuality,
+  useCompressUploads,
   useTheme,
-  useVideoQuality,
 } from "./hooks/useAuth";
 import { useAuthV2 } from "./hooks/useAuthV2";
 import { auth } from "./api/client";
@@ -19,8 +18,7 @@ export function App() {
   const v2 = useAuthV2();
   const [selectedCloud, setSelectedCloud] = useState<number | null>(null);
   const [dark, setDark] = useTheme();
-  const [imageQuality, setImageQuality] = useImageQuality();
-  const [videoQuality, setVideoQuality] = useVideoQuality();
+  const [compressUploads, setCompressUploads] = useCompressUploads();
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -102,15 +100,13 @@ export function App() {
           onMobileClose={() => setMobileSidebar(false)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <FilesPanel cloudId={selectedCloud} quality={imageQuality} />
+        <FilesPanel cloudId={selectedCloud} compressUploads={compressUploads} />
       </div>
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        imageQuality={imageQuality}
-        videoQuality={videoQuality}
-        onChangeImageQuality={setImageQuality}
-        onChangeVideoQuality={setVideoQuality}
+        compressUploads={compressUploads}
+        onChangeCompressUploads={setCompressUploads}
         me={v2.me}
         onLogout={async () => {
           setSettingsOpen(false);

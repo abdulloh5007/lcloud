@@ -35,6 +35,10 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
+from lcloud.api.compression import (
+    compress_image_in_place,
+    is_compressible_mime,
+)
 from lcloud.auth.storage_quota import (
     assert_can_store,
     get_used_and_quota,
@@ -73,6 +77,8 @@ def _serialize(f: File) -> dict[str, Any]:
         "name": f.original_name,
         "mime": f.mime,
         "size": f.size_bytes,
+        "compressed": bool(getattr(f, "compressed", False)),
+        "original_size_bytes": getattr(f, "original_size_bytes", None),
         "uploaded_at": f.uploaded_at.isoformat() if f.uploaded_at else None,
         "deleted_at": f.deleted_at.isoformat() if f.deleted_at else None,
     }
@@ -190,6 +196,18 @@ async def upload_file(
         int | None,
         Form(description="Unix timestamp the client used when signing (LC2)."),
     ] = None,
+    compress: Annotated[
+        bool,
+        Form(
+            description=(
+                "If true (default), server re-encodes images at slightly-lossy "
+                "quality 85 to save storage. Set false to upload byte-for-byte "
+                "(no compression, original quality preserved). Has no effect "
+                "on formats we can't recompress (e.g. video, raw). Required "
+                "form field — defaults to true if omitted."
+            )
+        ),
+    ] = True,
 ) -> dict[str, Any]:
     """Upload a file. Two modes:
 
@@ -198,13 +216,23 @@ async def upload_file(
     pubkey` against the user's stored pubkey. Caption written to TG is
     `LC2:{"o","h","s","t"}`. The server NEVER sees the user's privkey.
 
-    **LC1 (legacy)**: if any of the three fields is omitted, server
-    falls back to server-side signing with its built-in key. Use for
-    clients that can't do crypto (e.g. ad-hoc curl). Caption is
-    `LC1:{...}`.
+    **LC1 (legacy)**: if any of the three signing fields is omitted,
+    server falls back to server-side signing with its built-in key.
+
+    **Compression**: by default (compress=true) images are re-encoded
+    at q=85 JPEG/WebP, saving ~70% on file size with minimal visible
+    quality loss. Pass `compress=false` to upload bytes-as-is.
+
+    NB: When `compress=true` AND we actually re-encode the file, the
+    LC2 signature you provide may be against the ORIGINAL bytes — the
+    server still stores your sig + the original sha256 in DB, and
+    Telegram caption uses the post-compression sha256 (re-derived).
+    For full client-side ownership of compressed bytes, send compress=false
+    and compress on the client before uploading.
 
     Quota: pre-flight check after sha256 is known (rejects 413 before TG
-    upload). Increments `users.storage_used_bytes` on success.
+    upload). Increments `users.storage_used_bytes` on success using the
+    FINAL (post-compression) size.
     """
     await _ensure_userbot_authorized(manager)
     cloud = await _get_cloud_for_user(cloud_id, user.id, role=user.role)
@@ -212,23 +240,19 @@ async def upload_file(
     pool = get_worker_pool()
 
     # Stream to disk first so we know real size + sha256 for verification
-    tmp_path, size, sha = await _stream_to_temp(
+    tmp_path, original_size, original_sha = await _stream_to_temp(
         file, settings.data_dir / "tmp", settings.lc_max_file_bytes
     )
-
-    try:
-        await assert_can_store(user.id, size)
-    except HTTPException:
-        with contextlib.suppress(FileNotFoundError):
-            tmp_path.unlink()
-        raise
 
     use_lc2 = (
         client_sha256 is not None and signature is not None and ts is not None
     )
+    file_mime = file.content_type or "application/octet-stream"
 
+    # If LC2, verify against ORIGINAL bytes BEFORE we compress (the client
+    # signed the original; we mustn't change them under their feet for
+    # signature checking).
     if use_lc2:
-        # Validate hex shapes
         try:
             client_sha = bytes.fromhex(client_sha256 or "")
             sig_bytes = bytes.fromhex(signature or "")
@@ -239,22 +263,20 @@ async def upload_file(
                 400, detail={"reason": "lc2_bad_hex"}
             ) from None
 
-        # 1. Server-computed SHA-256 must match what client signed
-        if client_sha != sha:
+        if client_sha != original_sha:
             with contextlib.suppress(FileNotFoundError):
                 tmp_path.unlink()
             raise HTTPException(
                 400,
                 detail={
                     "reason": "lc2_sha256_mismatch",
-                    "server": sha.hex(),
+                    "server": original_sha.hex(),
                     "client": client_sha.hex(),
                 },
             )
-        # 2. Verify Ed25519 sig against THIS user's pubkey
         ok, why = verify_lc2_payload(
             pubkey=user.pubkey,
-            sha256=sha,
+            sha256=original_sha,
             signature=sig_bytes,
             ts=int(ts or 0),
         )
@@ -265,18 +287,62 @@ async def upload_file(
                 400, detail={"reason": "lc2_verify_failed", "why": why}
             )
 
+    # Compression pass (default-on; only applies to image formats Pillow
+    # supports and only when result is actually smaller).
+    final_path = tmp_path
+    final_size = original_size
+    final_mime = file_mime
+    final_sha = original_sha
+    was_compressed = False
+
+    if compress and is_compressible_mime(file_mime):
+        try:
+            (
+                final_path,
+                final_size,
+                final_mime,
+                was_compressed,
+            ) = compress_image_in_place(tmp_path, mime=file_mime)
+            if was_compressed:
+                # New file → recompute sha256
+                final_sha = hashlib.sha256(final_path.read_bytes()).digest()
+        except Exception as exc:
+            # Best-effort: don't fail upload because compression hiccupped
+            logger.warning("compression pass failed, uploading original: %s", exc)
+            final_path = tmp_path
+            final_size = original_size
+            final_mime = file_mime
+            was_compressed = False
+            final_sha = original_sha
+
+    # Quota check uses the FINAL size we'll actually persist
+    try:
+        await assert_can_store(user.id, final_size)
+    except HTTPException:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        if was_compressed and final_path != tmp_path:
+            with contextlib.suppress(FileNotFoundError):
+                final_path.unlink()
+        raise
+
+    if use_lc2 and not was_compressed:
+        # Client signed the original; we're uploading the original.
+        # Caption matches client's claim exactly.
+        sig_for_caption = bytes.fromhex(signature or "")
+        ts_for_caption = int(ts or 0)
         payload = Lc2Payload(
             pubkey=user.pubkey,
-            sha256=sha,
-            signature=sig_bytes,
-            ts=int(ts or 0),
+            sha256=final_sha,
+            signature=sig_for_caption,
+            ts=ts_for_caption,
         )
         try:
             lc2_result: Lc2UploadResult = await pool.submit(
                 upload_file_lc2(
                     manager.client,
                     chat_id=cloud.chat_id,
-                    file_path=tmp_path,
+                    file_path=final_path,
                     original_name=file.filename or f"file-{uuid.uuid4().hex}",
                     payload=payload,
                 )
@@ -294,19 +360,21 @@ async def upload_file(
                 tmp_path.unlink()
 
         message_id = lc2_result.message_id
-        stored_signature = sig_bytes
-        uploaded_at_unix = payload.ts
+        stored_signature = sig_for_caption
+        uploaded_at_unix = ts_for_caption
+        caption_kind = "LC2"
     else:
-        # Legacy LC1 path (admin server-signed)
+        # LC1 path: either no client sig, or we re-encoded so the client's
+        # sig over original bytes is no longer valid for the uploaded file.
         sk, _ = ensure_admin_keypair(settings)
         try:
             result: UploadResult = await pool.submit(
                 upload_file_to_cloud(
                     manager.client,
                     chat_id=cloud.chat_id,
-                    file_path=tmp_path,
+                    file_path=final_path,
                     original_name=file.filename or f"file-{uuid.uuid4().hex}",
-                    sha256_digest=sha,
+                    sha256_digest=final_sha,
                     signing_key=sk,
                 )
             )
@@ -314,6 +382,9 @@ async def upload_file(
             logger.exception("LC1 upload to Telegram failed")
             with contextlib.suppress(FileNotFoundError):
                 tmp_path.unlink()
+            if final_path != tmp_path:
+                with contextlib.suppress(FileNotFoundError):
+                    final_path.unlink()
             raise HTTPException(
                 502,
                 detail={"reason": "telegram_upload_failed", "error": str(exc)},
@@ -321,10 +392,14 @@ async def upload_file(
         else:
             with contextlib.suppress(FileNotFoundError):
                 tmp_path.unlink()
+            if final_path != tmp_path:
+                with contextlib.suppress(FileNotFoundError):
+                    final_path.unlink()
 
         message_id = result.message_id
         stored_signature = result.signature
         uploaded_at_unix = result.uploaded_at_unix
+        caption_kind = "LC1"
 
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -334,19 +409,25 @@ async def upload_file(
             owner_id=cloud.owner_id,
             owner_user_id=user.id,
             original_name=file.filename or f"file-{uuid.uuid4().hex}",
-            mime=file.content_type or "application/octet-stream",
-            size_bytes=size,
-            sha256=sha,
+            mime=final_mime,
+            size_bytes=final_size,
+            sha256=final_sha,
             signature=stored_signature,
+            compressed=was_compressed,
+            original_size_bytes=original_size if was_compressed else None,
         )
         sess.add(row)
         await sess.commit()
         await sess.refresh(row)
 
-    await increment_used(user.id, size)
+    await increment_used(user.id, final_size)
     out = _serialize(row)
-    out["caption_kind"] = "LC2" if use_lc2 else "LC1"
+    out["caption_kind"] = caption_kind
     out["uploaded_at_unix"] = uploaded_at_unix
+    out["compressed"] = was_compressed
+    if was_compressed:
+        out["original_size_bytes"] = original_size
+        out["compression_ratio"] = round(final_size / original_size, 3)
     return out
 
 
