@@ -1,0 +1,31 @@
+[Unit]
+Description=LCloud — Telegram-userbot personal cloud
+Documentation=file:///root/LCloud/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/LCloud
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/LCloud/.venv/bin/lcloud
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+# Hardening — kept minimal so Telethon's SQLite session writes work reliably.
+# Heavier ProtectSystem=strict / ProtectHome=read-only made libsqlite return
+# "attempt to write a readonly database" intermittently inside the namespace
+# even with /root/LCloud/data in ReadWritePaths. Keep only the no-cost flags.
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=append:/root/LCloud/logs/lcloud.log
+StandardError=append:/root/LCloud/logs/lcloud.err
+
+[Install]
+WantedBy=multi-user.target

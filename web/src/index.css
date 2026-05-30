@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hide native scrollbar tracks but keep scrolling functional */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.4) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 120, 0.4);
+  border-radius: 4px;
+}
+
+button:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid rgb(59 130 246 / 0.6);
+  outline-offset: 2px;
+}

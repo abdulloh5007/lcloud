@@ -1,0 +1,37 @@
+# --- secrets / state (NEVER commit) ---
+data/
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+
+# --- python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# --- frontend ---
+web/node_modules/
+web/dist/
+web/.vite/
+
+# --- logs / runtime ---
+logs/
+*.log
+
+# --- editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- old archived sessions ---
+session.rejected.*
