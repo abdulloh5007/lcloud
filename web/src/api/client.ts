@@ -87,17 +87,42 @@ export const auth = {
 // ---------------------------------------------------------------- clouds
 
 export const clouds = {
-  list: () => api<CloudRow[]>("/clouds"),
+  list: () => api<CloudRow[]>("/api/v1/clouds"),
   create: (name: string) =>
-    api<CloudRow>("/clouds", {
+    api<CloudRow>("/api/v1/clouds", {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
   remove: (id: number) =>
-    api<void>(`/clouds/${id}`, { method: "DELETE" }),
+    api<void>(`/api/v1/clouds/${id}`, { method: "DELETE" }),
 };
 
 // ---------------------------------------------------------------- files
+
+/**
+ * sessionStorage-held keypair (set by useAuthV2 on successful login).
+ * Used here so the upload helper can transparently sign files with LC2.
+ * Returns undefined if not logged in via V2.
+ */
+function readSessionKeypair():
+  | { pubkey: Uint8Array; privkeySeed: Uint8Array }
+  | undefined {
+  try {
+    const raw = sessionStorage.getItem("__lc_kp_session__");
+    if (!raw) return undefined;
+    const j = JSON.parse(raw) as { pubkey: string; privkeySeed: string };
+    const hex2 = (s: string) => {
+      const b = new Uint8Array(s.length / 2);
+      for (let i = 0; i < b.length; i++) b[i] = parseInt(s.substr(i * 2, 2), 16);
+      return b;
+    };
+    return { pubkey: hex2(j.pubkey), privkeySeed: hex2(j.privkeySeed) };
+  } catch {
+    return undefined;
+  }
+}
+
+export type UploadPhase = "signing" | "uploading";
 
 export const files = {
   list: (cloudId: number, params: { limit?: number; offset?: number } = {}) => {
@@ -105,25 +130,46 @@ export const files = {
     if (params.limit !== undefined) sp.set("limit", String(params.limit));
     if (params.offset !== undefined) sp.set("offset", String(params.offset));
     const qs = sp.toString();
-    return api<FilesPage>(`/clouds/${cloudId}/files${qs ? `?${qs}` : ""}`);
+    return api<FilesPage>(
+      `/api/v1/clouds/${cloudId}/files${qs ? `?${qs}` : ""}`,
+    );
   },
   rename: (id: number, name: string) =>
     api<FileRow>(`/files/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
-  upload: (
+  upload: async (
     cloudId: number,
     file: File,
-    onProgress?: (loaded: number, total: number) => void,
+    onProgress?: (
+      loaded: number,
+      total: number,
+      phase: UploadPhase,
+    ) => void,
   ): Promise<FileRow> => {
+    const fd = new FormData();
+    fd.append("file", file);
+
+    // If we have a V2 keypair → sign client-side (LC2 caption).
+    const kp = readSessionKeypair();
+    if (kp) {
+      onProgress?.(0, 100, "signing");
+      const { signFileForUpload } = await import("@/auth/lc2");
+      const signed = await signFileForUpload(file, kp.pubkey, kp.privkeySeed);
+      fd.append("client_sha256", signed.fileSha256Hex);
+      fd.append("signature", signed.signatureHex);
+      fd.append("ts", String(signed.ts));
+      onProgress?.(100, 100, "signing");
+    }
+
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/clouds/${cloudId}/files`);
+      xhr.open("POST", `/api/v1/clouds/${cloudId}/files`);
       xhr.withCredentials = true;
       xhr.upload.addEventListener("progress", (e) => {
         if (onProgress && e.lengthComputable) {
-          onProgress(e.loaded, e.total);
+          onProgress(e.loaded, e.total, "uploading");
         }
       });
       xhr.onload = () => {
@@ -145,15 +191,13 @@ export const files = {
         }
       };
       xhr.onerror = () => reject(new ApiError(0, "network_error", null));
-      const fd = new FormData();
-      fd.append("file", file);
       xhr.send(fd);
     });
   },
-  remove: (id: number) => api<void>(`/files/${id}`, { method: "DELETE" }),
-  downloadUrl: (id: number) => `/files/${id}/download`,
+  remove: (id: number) => api<void>(`/api/v1/files/${id}`, { method: "DELETE" }),
+  downloadUrl: (id: number) => `/api/v1/files/${id}/download`,
   thumbUrl: (id: number, size: ThumbSize) =>
-    `/files/${id}/thumb?size=${size}`,
+    `/files/${id}/thumb?size=${size}`,  // V1 thumb route — V2 thumb not implemented yet
   setTags: (fileId: number, tagIds: number[]) =>
     api<{ file_id: number; tag_ids: number[] }>(
       `/files/${fileId}/tags`,

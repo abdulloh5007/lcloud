@@ -44,6 +44,7 @@ interface ProgressItem {
   name: string;
   loaded: number;
   total: number;
+  phase: "signing" | "uploading";
   error?: string;
 }
 
@@ -165,13 +166,13 @@ export function FilesPanel({ cloudId, quality }: Props) {
       const key = `${f.name}-${Date.now()}-${Math.random()}`;
       setProgress((p) => ({
         ...p,
-        [key]: { name: f.name, loaded: 0, total: f.size },
+        [key]: { name: f.name, loaded: 0, total: f.size, phase: "signing" },
       }));
       try {
-        await filesApi.upload(cloudId, f, (loaded, total) => {
+        await filesApi.upload(cloudId, f, (loaded, total, phase) => {
           setProgress((p) => ({
             ...p,
-            [key]: { name: f.name, loaded, total },
+            [key]: { name: f.name, loaded, total, phase },
           }));
         });
         setProgress((p) => {
@@ -182,7 +183,13 @@ export function FilesPanel({ cloudId, quality }: Props) {
         const msg = e instanceof ApiError ? e.reason : "upload failed";
         setProgress((p) => ({
           ...p,
-          [key]: { name: f.name, loaded: f.size, total: f.size, error: msg },
+          [key]: {
+            name: f.name,
+            loaded: f.size,
+            total: f.size,
+            phase: "uploading",
+            error: msg,
+          },
         }));
       }
     }
@@ -253,7 +260,19 @@ export function FilesPanel({ cloudId, quality }: Props) {
             return (
               <div key={k} className="text-xs">
                 <div className="flex justify-between">
-                  <span className="truncate max-w-[60%]">{p.name}</span>
+                  <span className="truncate max-w-[60%]">
+                    {p.phase === "signing" && !p.error && (
+                      <span className="mr-1.5 text-emerald-600 dark:text-emerald-400">
+                        🔐
+                      </span>
+                    )}
+                    {p.phase === "uploading" && !p.error && (
+                      <span className="mr-1.5 text-blue-600 dark:text-blue-400">
+                        📤
+                      </span>
+                    )}
+                    {p.name}
+                  </span>
                   <span
                     className={classNames(
                       "tabular-nums",
@@ -262,14 +281,20 @@ export function FilesPanel({ cloudId, quality }: Props) {
                   >
                     {p.error
                       ? `❌ ${p.error}`
-                      : `${formatBytes(p.loaded)} / ${formatBytes(p.total)}`}
+                      : p.phase === "signing"
+                        ? "Подписываем…"
+                        : `${formatBytes(p.loaded)} / ${formatBytes(p.total)}`}
                   </span>
                 </div>
                 <div className="h-1 bg-neutral-200 dark:bg-neutral-800 rounded overflow-hidden">
                   <div
                     className={classNames(
-                      "h-full",
-                      p.error ? "bg-red-500" : "bg-blue-500",
+                      "h-full transition-all",
+                      p.error
+                        ? "bg-red-500"
+                        : p.phase === "signing"
+                          ? "bg-emerald-500"
+                          : "bg-blue-500",
                     )}
                     style={{ width: `${pct}%` }}
                   />
