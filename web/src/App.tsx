@@ -111,6 +111,13 @@ export function App() {
         videoQuality={videoQuality}
         onChangeImageQuality={setImageQuality}
         onChangeVideoQuality={setVideoQuality}
+        me={v2.me}
+        onLogout={async () => {
+          setSettingsOpen(false);
+          await v2.logout();
+          await auth.logout();
+          void refresh();
+        }}
       />
     </div>
   );

@@ -1,7 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { Modal } from "./ui/Modal";
 import { classNames } from "@/lib/format";
+import { ApiKeysSection } from "./ApiKeysSection";
+import { AccountSection } from "./AccountSection";
 import type { ThumbSize } from "@/api/types";
+import type { AuthMe } from "@/api/v2_client";
 
 interface Props {
   open: boolean;
@@ -10,19 +13,24 @@ interface Props {
   videoQuality: ThumbSize;
   onChangeImageQuality: (q: ThumbSize) => void;
   onChangeVideoQuality: (q: ThumbSize) => void;
+  me?: AuthMe;
+  onLogout: () => void;
 }
 
-type TabKey = "general";
+type TabKey = "general" | "api_keys" | "account";
 
-const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: "general", label: "Общие" },
+const TABS: Array<{ key: TabKey; label: string; icon: string }> = [
+  { key: "general", label: "Общие", icon: "⚙️" },
+  { key: "api_keys", label: "API-ключи", icon: "🔑" },
+  { key: "account", label: "Аккаунт", icon: "👤" },
 ];
 
-const QUALITY_OPTIONS: Array<{ value: ThumbSize; label: string; hint: string }> = [
-  { value: "low", label: "Low", hint: "Самое лёгкое — быстро на медленном интернете" },
-  { value: "med", label: "Medium", hint: "По умолчанию — серверный ресайз до 800px" },
-  { value: "high", label: "HD", hint: "Оригинал — без ресайза" },
-];
+const QUALITY_OPTIONS: Array<{ value: ThumbSize; label: string; hint: string }> =
+  [
+    { value: "low", label: "Low", hint: "Самое лёгкое — быстро на медленном интернете" },
+    { value: "med", label: "Medium", hint: "По умолчанию — серверный ресайз до 800px" },
+    { value: "high", label: "HD", hint: "Оригинал — без ресайза" },
+  ];
 
 export function SettingsModal({
   open,
@@ -31,23 +39,26 @@ export function SettingsModal({
   videoQuality,
   onChangeImageQuality,
   onChangeVideoQuality,
+  me,
+  onLogout,
 }: Props) {
   const [tab, setTab] = useState<TabKey>("general");
   return (
-    <Modal open={open} onClose={onClose} title="Настройки" width="max-w-xl">
-      <div className="flex border-b border-neutral-200 dark:border-neutral-800 -mx-5 mb-4 px-3">
+    <Modal open={open} onClose={onClose} title="Настройки" width="max-w-2xl">
+      <div className="flex border-b border-neutral-200 dark:border-neutral-800 -mx-5 mb-4 px-3 overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => setTab(t.key)}
             className={classNames(
-              "px-4 py-2 text-sm border-b-2 transition",
+              "px-4 py-2 text-sm border-b-2 transition whitespace-nowrap",
               tab === t.key
                 ? "border-blue-600 text-blue-600 font-medium"
-                : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200",
+                : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
             )}
           >
+            <span className="mr-1">{t.icon}</span>
             {t.label}
           </button>
         ))}
@@ -62,11 +73,18 @@ export function SettingsModal({
           />
           <QualitySection
             label="Качество видео"
-            description="Влияет на превью видео. Сейчас в проде доступно только Original (стрим из Telegram)."
+            description="Влияет на превью видео. Сейчас в проде доступно только Original."
             value={videoQuality}
             onChange={onChangeVideoQuality}
           />
         </div>
+      )}
+      {tab === "api_keys" && <ApiKeysSection />}
+      {tab === "account" && me && (
+        <AccountSection me={me} onLogout={onLogout} />
+      )}
+      {tab === "account" && !me && (
+        <div className="text-sm text-neutral-500">Загрузка…</div>
       )}
     </Modal>
   );
@@ -84,26 +102,22 @@ function QualitySection({
   onChange: (q: ThumbSize) => void;
 }) {
   return (
-    <section>
-      <div className="text-sm font-medium mb-1">{label}</div>
-      <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-3">
-        {description}
-      </p>
-      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={label}>
-        {QUALITY_OPTIONS.map((o) => (
+    <div>
+      <h3 className="font-medium mb-1">{label}</h3>
+      <p className="text-xs text-neutral-500 mb-3">{description}</p>
+      <div className="grid grid-cols-3 gap-2">
+        {QUALITY_OPTIONS.map((opt) => (
           <Choice
-            key={o.value}
-            selected={value === o.value}
-            onClick={() => onChange(o.value)}
+            key={opt.value}
+            selected={value === opt.value}
+            onClick={() => onChange(opt.value)}
           >
-            <div className="text-sm font-medium">{o.label}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5 leading-tight">
-              {o.hint}
-            </div>
+            <div className="font-medium text-sm">{opt.label}</div>
+            <div className="text-xs text-neutral-500 mt-1">{opt.hint}</div>
           </Choice>
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -119,14 +133,12 @@ function Choice({
   return (
     <button
       type="button"
-      role="radio"
-      aria-checked={selected}
       onClick={onClick}
       className={classNames(
-        "rounded-lg border p-2 text-left transition",
+        "text-left p-3 rounded-lg border-2 transition",
         selected
-          ? "border-blue-500 bg-blue-50/40 dark:bg-blue-950/20"
-          : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600",
+          ? "border-blue-600 bg-blue-50 dark:bg-blue-950/30"
+          : "border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700"
       )}
     >
       {children}

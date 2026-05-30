@@ -73,10 +73,13 @@ def _login(client: TestClient) -> tuple[str, SigningKey, int]:
 
 def test_mint_key_format() -> None:
     minted = ak.mint_key()
-    assert minted.raw.startswith("lck_")
-    assert len(minted.raw) > ak.PREFIX_LEN + 8
+    assert minted.raw.startswith("lc-")
+    assert len(minted.raw) == ak.KEY_TOTAL_LEN  # 17 chars total
     assert minted.prefix == minted.raw[: ak.PREFIX_LEN]
     assert minted.hash.startswith("$argon2")
+    # Body uses confusion-safe alphabet (no 0/O, 1/l/I)
+    body = minted.raw[len(ak.KEY_PREFIX) :]
+    assert all(c in ak.ALPHABET for c in body), f"unexpected char in {body!r}"
 
 
 def test_verify_correct_key_passes() -> None:
@@ -96,9 +99,12 @@ def test_verify_garbage_does_not_crash() -> None:
 
 
 def test_looks_like_api_key() -> None:
-    assert ak.looks_like_api_key("lck_xxxxxxxxxxxx") is True
-    assert ak.looks_like_api_key("lck_") is False
-    assert ak.looks_like_api_key("not_a_key") is False
+    assert ak.looks_like_api_key("lc-abcdefghijklmn") is True
+    # Wrong length → False
+    assert ak.looks_like_api_key("lc-abc") is False
+    # Wrong prefix → False
+    assert ak.looks_like_api_key("not_a_key_at_all_") is False
+    # None → False
     assert ak.looks_like_api_key(None) is False
 
 
@@ -112,8 +118,9 @@ def test_mint_endpoint_returns_raw_once_and_persists_meta(
     r = app_client.post("/api/v1/keys", json={"label": "ci-bot"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["raw"].startswith("lck_")
-    assert body["prefix"] == body["raw"][:12]
+    assert body["raw"].startswith("lc-")
+    assert len(body["raw"]) == 17
+    assert body["prefix"] == body["raw"][:8]
     assert body["label"] == "ci-bot"
     assert body["revoked_at"] is None
 
@@ -224,7 +231,7 @@ def test_bearer_revoked_key_rejected(app_client: TestClient) -> None:
 def test_bearer_garbage_token_401(app_client: TestClient) -> None:
     r = app_client.get(
         "/api/v1/keys",
-        headers={"Authorization": "Bearer lck_completelybogus"},
+        headers={"Authorization": "Bearer lc-completelybogu"},  # 17 chars wrong
     )
     assert r.status_code == 401
 
