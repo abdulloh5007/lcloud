@@ -33,6 +33,8 @@ from lcloud.api import (
     file_tags_router,
     files_router,
     magic_router,
+    payments_admin_router,
+    payments_public_router,
     search_router,
     tags_router,
     v2_clouds_files_router,
@@ -280,6 +282,8 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(auth_v2_router)
     app.include_router(api_keys_router)
+    app.include_router(payments_public_router)
+    app.include_router(payments_admin_router)
     app.include_router(v2_clouds_router)
     app.include_router(v2_clouds_files_router)
     app.include_router(v2_files_router)

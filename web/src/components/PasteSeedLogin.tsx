@@ -55,8 +55,7 @@ export function PasteSeedLogin({ onSuccess, onCreate }: Props) {
       <h2 className="text-2xl font-bold">Войти по сид-фразе</h2>
       <p className="text-sm text-zinc-500">
         Вставьте 12 или 24 слова, разделённых пробелами.
-      </p>
-      <textarea
+      </p>      <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="abandon ability able about above absent absorb abstract absurd abuse access accident"
@@ -94,7 +93,7 @@ export function PasteSeedLogin({ onSuccess, onCreate }: Props) {
           onClick={onCreate}
           className="w-full py-2 text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
         >
-          Создать новый аккаунт →
+          Купить новый аккаунт →
         </button>
       )}
     </div>

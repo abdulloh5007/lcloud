@@ -225,6 +225,64 @@ export const tags = {
     api<void>(`/tags/${id}`, { method: "DELETE" }),
 };
 
+// ---------------------------------------------------------------- payments
+
+export interface PaymentInfo {
+  card_number: string;
+  card_holder: string;
+  scheme: string;
+  amount_cents: number;
+  currency: string;
+  tier_label: string;
+}
+
+export interface PaymentRequestRow {
+  id: number;
+  contact_handle: string;
+  amount_cents: number;
+  currency: string;
+  note: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string | null;
+  approved_at: string | null;
+  rejected_at: string | null;
+  generated_user_id: number | null;
+  ip_addr: string | null;
+}
+
+export const payments = {
+  info: () => api<PaymentInfo>('/api/v1/payments/info'),
+  request: (contact_handle: string, note?: string) =>
+    api<{ id: number; status: string; duplicate: boolean }>(
+      '/api/v1/payments/request',
+      {
+        method: 'POST',
+        body: JSON.stringify({ contact_handle, note }),
+      },
+    ),
+  // Admin only
+  list: (status?: 'pending' | 'approved' | 'rejected') => {
+    const qs = status ? `?status=${status}` : '';
+    return api<PaymentRequestRow[]>(`/api/v1/admin/payments${qs}`);
+  },
+  approve: (id: number) =>
+    api<{
+      request_id: number;
+      user_id: number;
+      contact_handle: string;
+      seed_phrase: string;
+      warning: string;
+    }>(`/api/v1/admin/payments/${id}/approve`, { method: 'POST' }),
+  reject: (id: number, reason?: string) =>
+    api<{ request_id: number; status: string }>(
+      `/api/v1/admin/payments/${id}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    ),
+};
+
 // ---------------------------------------------------------------- search
 
 export const search = {

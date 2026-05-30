@@ -171,6 +171,52 @@ class User(Base):
         BigInteger, nullable=False, default=5 * 1024 * 1024 * 1024
     )
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Payments / recovery (added in 0004)
+    contact_handle: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    paid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    encrypted_seed: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
+    seed_salt: Mapped[bytes | None] = mapped_column(
+        LargeBinary(16), nullable=True
+    )
+    pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pin_failed_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    pin_locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PaymentRequest(Base):
+    """Queue of pending account-purchase requests awaiting admin review."""
+
+    __tablename__ = "payment_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_handle: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=700)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    generated_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", name="fk_payreq_user"), nullable=True
+    )
+    ip_addr: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ApiKey(Base):

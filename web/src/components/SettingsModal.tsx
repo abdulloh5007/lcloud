@@ -3,6 +3,7 @@ import { Modal } from "./ui/Modal";
 import { classNames } from "@/lib/format";
 import { ApiKeysSection } from "./ApiKeysSection";
 import { AccountSection } from "./AccountSection";
+import { PaymentRequestsAdmin } from "./PaymentRequestsAdmin";
 import type { AuthMe } from "@/api/v2_client";
 
 interface Props {
@@ -14,13 +15,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type TabKey = "general" | "api_keys" | "account";
-
-const TABS: Array<{ key: TabKey; label: string; icon: string }> = [
-  { key: "general", label: "Общие", icon: "⚙️" },
-  { key: "api_keys", label: "API-ключи", icon: "🔑" },
-  { key: "account", label: "Аккаунт", icon: "👤" },
-];
+type TabKey = "general" | "api_keys" | "account" | "payments";
 
 export function SettingsModal({
   open,
@@ -30,11 +25,21 @@ export function SettingsModal({
   me,
   onLogout,
 }: Props) {
+  // Build tabs list dynamically — admin gets an extra "Заявки" tab.
+  const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
+    { key: "general", label: "Общие", icon: "⚙️" },
+    { key: "api_keys", label: "API-ключи", icon: "🔑" },
+    { key: "account", label: "Аккаунт", icon: "👤" },
+  ];
+  if (me?.role === "admin") {
+    tabs.push({ key: "payments", label: "Заявки", icon: "💳" });
+  }
+
   const [tab, setTab] = useState<TabKey>("general");
   return (
     <Modal open={open} onClose={onClose} title="Настройки" width="max-w-2xl">
       <div className="flex border-b border-neutral-200 dark:border-neutral-800 -mx-5 mb-4 px-3 overflow-x-auto">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -66,6 +71,7 @@ export function SettingsModal({
       {tab === "account" && !me && (
         <div className="text-sm text-neutral-500">Загрузка…</div>
       )}
+      {tab === "payments" && <PaymentRequestsAdmin />}
     </Modal>
   );
 }

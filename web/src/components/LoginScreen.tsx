@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CreateAccountScreen } from './CreateAccountScreen'
+import { BuyAccountScreen } from './BuyAccountScreen'
 import { PasteSeedLogin } from './PasteSeedLogin'
 import { BootstrapAdminTGForm } from './BootstrapAdminTGForm'
 import type { UserKeypair } from '@/hooks/useAuthV2'
@@ -14,16 +14,17 @@ interface Props {
   onAdminConnected: () => void
 }
 
-type Mode = 'login' | 'create'
+type Mode = 'login' | 'buy'
 
 /**
  * Top-level login orchestrator:
  *
  * 1. If the userbot itself isn't connected to a Telegram account → show
- *    the V1 admin phone+code form (this is a one-time bootstrap step;
- *    after success the userbot sends 12 words to Saved Messages).
+ *    the operator phone+code form (one-time bootstrap).
  *
- * 2. Otherwise → seed-phrase auth (V2). Toggle between Login and Create.
+ * 2. Otherwise → toggle between "Войти по сид-фразе" (PasteSeedLogin)
+ *    and "Купить аккаунт" (BuyAccountScreen). Account creation is no
+ *    longer free — buyers go through manual payment + admin approval.
  */
 export function LoginScreen({
   userbotAuthed,
@@ -53,15 +54,13 @@ export function LoginScreen({
         ) : mode === 'login' ? (
           <PasteSeedLogin
             onSuccess={onSignedIn}
-            onCreate={() => setMode('create')}
+            onCreate={() => setMode('buy')}
           />
         ) : (
-          <CreateAccountScreen
-            onSuccess={onSignedIn}
-            onCancel={() => setMode('login')}
-          />
+          <BuyAccountScreen onCancel={() => setMode('login')} />
         )}
       </div>
     </div>
   )
 }
+

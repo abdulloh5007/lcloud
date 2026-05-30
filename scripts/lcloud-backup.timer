@@ -1,0 +1,13 @@
+[Unit]
+Description=LCloud daily backup timer
+Requires=lcloud-backup.service
+
+[Timer]
+# Daily at 03:30 local time. Persistent: if the system was off at the
+# scheduled time, run as soon as it boots back up.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
