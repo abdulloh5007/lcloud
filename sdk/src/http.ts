@@ -1,0 +1,107 @@
+import { LCloudDbError, reasonFromDetail } from "./errors.js";
+import type { FileRow, UploadProgress } from "./types.js";
+import { isFormData } from "./utils.js";
+
+export interface HttpClientOptions {
+  endpoint: string;
+  apiKey?: string;
+  fetch?: typeof fetch;
+  credentials?: RequestCredentials;
+}
+
+export class HttpClient {
+  private readonly endpoint: string;
+  private readonly apiKey?: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly credentials: RequestCredentials;
+
+  constructor(options: HttpClientOptions) {
+    this.endpoint = options.endpoint.replace(/\/+$/, "");
+    this.apiKey = options.apiKey;
+    this.fetchImpl = options.fetch ?? fetch;
+    this.credentials = options.credentials ?? "include";
+  }
+
+  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers);
+    if (!headers.has("Content-Type") && init.body !== undefined) {
+      if (!isFormData(init.body)) headers.set("Content-Type", "application/json");
+    }
+    if (this.apiKey) {
+      headers.set("Authorization", `Bearer ${this.apiKey}`);
+    }
+    const response = await this.fetchImpl(this.url(path), {
+      credentials: this.credentials,
+      ...init,
+      headers,
+    });
+    if (!response.ok) {
+      throw await responseError(response);
+    }
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  }
+
+  url(path: string): string {
+    return `${this.endpoint}${path}`;
+  }
+
+  uploadWithXhr(
+    path: string,
+    body: FormData,
+    onProgress: (progress: UploadProgress) => void,
+  ): Promise<FileRow> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", this.url(path));
+      xhr.withCredentials = this.credentials === "include";
+      if (this.apiKey) xhr.setRequestHeader("Authorization", `Bearer ${this.apiKey}`);
+      xhr.upload.addEventListener("progress", (event) => {
+        if (!event.lengthComputable) return;
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percent: event.total ? (event.loaded / event.total) * 100 : 0,
+          phase: "uploading",
+        });
+      });
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as FileRow);
+          } catch (error) {
+            reject(error);
+          }
+          return;
+        }
+        reject(parseXhrError(xhr));
+      };
+      xhr.onerror = () => reject(new LCloudDbError(0, "network_error", null));
+      xhr.send(body);
+    });
+  }
+}
+
+async function responseError(response: Response): Promise<LCloudDbError> {
+  let detail: unknown = await response.text();
+  try {
+    detail = JSON.parse(String(detail));
+  } catch {
+    // keep text detail
+  }
+  return new LCloudDbError(
+    response.status,
+    reasonFromDetail(detail, `http_${response.status}`),
+    detail,
+  );
+}
+
+function parseXhrError(xhr: XMLHttpRequest): LCloudDbError {
+  let detail: unknown = xhr.responseText;
+  try {
+    detail = JSON.parse(xhr.responseText);
+  } catch {
+    // keep text response
+  }
+  return new LCloudDbError(xhr.status, reasonFromDetail(detail, `http_${xhr.status}`), detail);
+}
