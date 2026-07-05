@@ -36,6 +36,14 @@ const RULES: JsonAccessRule[] = ["owner", "authenticated", "public"];
 const OPS: JsonWhereOp[] = ["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"];
 
 type WriteMode = "create" | "set" | "patch";
+type DbPage = "documents" | "editor" | "rules" | "events";
+
+const DB_PAGES: Array<{ id: DbPage; label: string; icon: LucideIcon }> = [
+  { id: "documents", label: "Documents", icon: FileJson },
+  { id: "editor", label: "Editor", icon: Braces },
+  { id: "rules", label: "Rules", icon: Globe2 },
+  { id: "events", label: "Events", icon: Activity },
+];
 
 interface QueryDraft {
   field: string;
@@ -99,6 +107,7 @@ export function DbDashboard() {
   const [events, setEvents] = useState<JsonDbEvent[]>([]);
   const [lastEventId, setLastEventId] = useState(0);
   const [copiedPath, setCopiedPath] = useState(false);
+  const [activePage, setActivePage] = useState<DbPage>("documents");
 
   const collectionsQ = useQuery({
     queryKey: ["json-db", "collections"],
@@ -206,6 +215,7 @@ export function DbDashboard() {
       setNewCollection("");
       setCreateCollectionError(null);
       setSelectedName(row.name);
+      setActivePage("documents");
       void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
     },
     onError: (e) => setCreateCollectionError(errorText(e)),
@@ -323,6 +333,7 @@ export function DbDashboard() {
     setDocJson(prettyJson(row.data));
     setWriteMode("patch");
     setDocError(null);
+    setActivePage("editor");
   }
 
   function newDocument() {
@@ -331,10 +342,12 @@ export function DbDashboard() {
     setDocJson(EMPTY_DOC);
     setWriteMode("create");
     setDocError(null);
+    setActivePage("editor");
   }
 
   const publicPath = rulesQ.data?.public_base_path ?? "";
   const hasCollections = (collectionsQ.data ?? []).length > 0;
+  const currentPage = DB_PAGES.find((page) => page.id === activePage) ?? DB_PAGES[0];
 
   return (
     <main className="flex-1 min-w-0 bg-bg dark:bg-bg-dark text-neutral-900 dark:text-neutral-100">
@@ -368,25 +381,66 @@ export function DbDashboard() {
                     </span>
                   </>
                 )}
+                <span aria-hidden="true">·</span>
+                <span>
+                  page: <span className="font-medium text-neutral-700 dark:text-neutral-300">{currentPage.label}</span>
+                </span>
               </div>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                void collectionsQ.refetch();
-                void documentsQ.refetch();
-                void rulesQ.refetch();
-                void validatorQ.refetch();
-              }}
-            >
-              <RefreshCw size={14} />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
+            <div className="flex min-w-0 items-center gap-2">
+              <label className="relative min-w-0">
+                <span className="sr-only">DB console page</span>
+                <select
+                  value={activePage}
+                  onChange={(e) => setActivePage(e.target.value as DbPage)}
+                  className="h-10 w-40 rounded-lg border border-neutral-200 bg-bg px-3 text-sm font-medium dark:border-neutral-700 dark:bg-bg-dark sm:w-44"
+                >
+                  {DB_PAGES.map((page) => (
+                    <option key={page.id} value={page.id}>
+                      {page.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void collectionsQ.refetch();
+                  void documentsQ.refetch();
+                  void rulesQ.refetch();
+                  void validatorQ.refetch();
+                }}
+              >
+                <RefreshCw size={14} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+            </div>
           </div>
+          <nav className="mt-3 hidden items-center gap-1 overflow-x-auto md:flex">
+            {DB_PAGES.map((page) => {
+              const Icon = page.icon;
+              return (
+                <button
+                  key={page.id}
+                  type="button"
+                  onClick={() => setActivePage(page.id)}
+                  className={classNames(
+                    "inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-[background-color,color,scale] duration-150 ease-out active:scale-[0.96]",
+                    activePage === page.id
+                      ? "bg-blue-600 text-white"
+                      : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800",
+                  )}
+                >
+                  <Icon size={15} />
+                  {page.label}
+                </button>
+              );
+            })}
+          </nav>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_360px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col border-b border-neutral-200 bg-panel dark:border-neutral-800 dark:bg-panel-dark lg:border-b-0 lg:border-r">
             <div className="flex items-center justify-between gap-2 px-3 py-3">
               <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
@@ -469,7 +523,12 @@ export function DbDashboard() {
             )}
           </aside>
 
-          <section className="min-h-0 border-b border-neutral-200 dark:border-neutral-800 lg:border-b-0 lg:border-r">
+          <section
+            className={classNames(
+              "min-h-0 border-b border-neutral-200 dark:border-neutral-800 lg:border-b-0",
+              activePage !== "documents" && "hidden",
+            )}
+          >
             <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-neutral-200 bg-panel/70 px-3 py-3 dark:border-neutral-800 dark:bg-panel-dark/70">
                 <div className="flex flex-wrap items-center gap-2">
@@ -597,7 +656,7 @@ export function DbDashboard() {
                   <EmptyState
                     icon={FileJson}
                     title="Документов нет"
-                    text="Создайте первый JSON document справа."
+                    text="Создайте первый JSON document на странице Editor."
                   />
                 )}
                 <div className="grid gap-2">
@@ -614,9 +673,19 @@ export function DbDashboard() {
             </div>
           </section>
 
-          <aside className="min-h-0 overflow-y-auto bg-panel dark:bg-panel-dark thin-scroll">
-            <div className="space-y-4 p-3">
-              <section className="rounded-lg bg-bg p-3 surface-shadow dark:bg-bg-dark">
+          <section
+            className={classNames(
+              "min-h-0 overflow-y-auto bg-bg p-3 dark:bg-bg-dark thin-scroll",
+              activePage === "documents" && "hidden",
+            )}
+          >
+            <div className="mx-auto w-full max-w-5xl space-y-4">
+              <section
+                className={classNames(
+                  "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
+                  activePage !== "editor" && "hidden",
+                )}
+              >
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
                     <h2 className="text-sm font-semibold">Document editor</h2>
@@ -698,7 +767,12 @@ export function DbDashboard() {
                 </div>
               </section>
 
-              <section className="rounded-lg bg-bg p-3 surface-shadow dark:bg-bg-dark">
+              <section
+                className={classNames(
+                  "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
+                  activePage !== "rules" && "hidden",
+                )}
+              >
                 <div className="mb-3 flex items-center gap-2">
                   <Globe2 size={15} className="text-neutral-400" />
                   <h2 className="text-sm font-semibold">Rules</h2>
@@ -739,7 +813,12 @@ export function DbDashboard() {
                 </Button>
               </section>
 
-              <section className="rounded-lg bg-bg p-3 surface-shadow dark:bg-bg-dark">
+              <section
+                className={classNames(
+                  "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
+                  activePage !== "rules" && "hidden",
+                )}
+              >
                 <div className="mb-3 flex items-center gap-2">
                   <Braces size={15} className="text-neutral-400" />
                   <h2 className="text-sm font-semibold">Public write validator</h2>
@@ -781,7 +860,12 @@ export function DbDashboard() {
                 </div>
               </section>
 
-              <section className="rounded-lg bg-bg p-3 surface-shadow dark:bg-bg-dark">
+              <section
+                className={classNames(
+                  "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
+                  activePage !== "events" && "hidden",
+                )}
+              >
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Activity size={15} className="text-emerald-600 dark:text-emerald-400" />
@@ -816,7 +900,7 @@ export function DbDashboard() {
                 </div>
               </section>
             </div>
-          </aside>
+          </section>
         </div>
       </div>
     </main>
