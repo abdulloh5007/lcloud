@@ -1,13 +1,30 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ApiError, auth } from '@/api/client'
+import type { LoginFlowState } from '@/api/types'
 import { Button } from './ui/Button'
 import { TextField } from './ui/TextField'
 
 interface Props {
+  authFlowState: LoginFlowState
   onAuthorized: () => void
 }
 
 type Stage = 'phone' | 'code' | 'password'
+const STAGE_KEY = 'lcloud:telegram-login-stage'
+const PHONE_KEY = 'lcloud:telegram-login-phone'
+
+function stageFromFlow(state: LoginFlowState): Stage {
+  if (state === 'pwd_needed') return 'password'
+  if (state === 'code_sent') return 'code'
+  return 'phone'
+}
+
+function readStoredStage(fallback: Stage): Stage {
+  const stored = sessionStorage.getItem(STAGE_KEY)
+  return stored === 'phone' || stored === 'code' || stored === 'password'
+    ? stored
+    : fallback
+}
 
 /**
  * One-time admin TG-account connection: phone → code → (optional 2FA password).
@@ -19,13 +36,37 @@ type Stage = 'phone' | 'code' | 'password'
  *
  * The user then uses those 12 words to log in via seed-phrase flow.
  */
-export function BootstrapAdminTGForm({ onAuthorized }: Props) {
-  const [stage, setStage] = useState<Stage>('phone')
-  const [phone, setPhone] = useState('')
+export function BootstrapAdminTGForm({ authFlowState, onAuthorized }: Props) {
+  const initialStage = useMemo(() => stageFromFlow(authFlowState), [authFlowState])
+  const [stage, setStage] = useState<Stage>(() =>
+    initialStage === 'phone' ? 'phone' : readStoredStage(initialStage)
+  )
+  const [phone, setPhone] = useState(() => sessionStorage.getItem(PHONE_KEY) ?? '')
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (authFlowState === 'code_sent' && stage === 'phone') {
+      setStage('code')
+    } else if (authFlowState === 'pwd_needed' && stage !== 'password') {
+      setStage('password')
+    }
+  }, [authFlowState, stage])
+
+  useEffect(() => {
+    sessionStorage.setItem(STAGE_KEY, stage)
+  }, [stage])
+
+  useEffect(() => {
+    if (phone.trim()) sessionStorage.setItem(PHONE_KEY, phone)
+  }, [phone])
+
+  function clearStoredFlow() {
+    sessionStorage.removeItem(STAGE_KEY)
+    sessionStorage.removeItem(PHONE_KEY)
+  }
 
   async function submitPhone() {
     if (!phone.trim() || busy) return
@@ -35,7 +76,12 @@ export function BootstrapAdminTGForm({ onAuthorized }: Props) {
       await auth.start(phone.trim())
       setStage('code')
     } catch (e) {
-      setErr(humanizeApiError(e))
+      if (e instanceof ApiError && e.reason === 'flow_already_active') {
+        setStage('code')
+        setErr(null)
+      } else {
+        setErr(humanizeApiError(e))
+      }
     } finally {
       setBusy(false)
     }
@@ -47,9 +93,10 @@ export function BootstrapAdminTGForm({ onAuthorized }: Props) {
     setErr(null)
     try {
       const r = await auth.code(code.trim())
-      if ('state' in r && r.state === 'awaiting_password') {
+      if (('need_password' in r && r.need_password) || ('state' in r && r.state === 'pwd_needed')) {
         setStage('password')
       } else {
+        clearStoredFlow()
         onAuthorized()
       }
     } catch (e) {
@@ -65,6 +112,7 @@ export function BootstrapAdminTGForm({ onAuthorized }: Props) {
     setErr(null)
     try {
       await auth.password(password)
+      clearStoredFlow()
       onAuthorized()
     } catch (e) {
       setErr(humanizeApiError(e))
@@ -81,6 +129,7 @@ export function BootstrapAdminTGForm({ onAuthorized }: Props) {
       setCode('')
       setPassword('')
       setErr(null)
+      clearStoredFlow()
     }
   }
 
@@ -104,7 +153,7 @@ export function BootstrapAdminTGForm({ onAuthorized }: Props) {
       {stage === 'code' && (
         <>
           <p className="text-xs text-zinc-500">
-            Код отправлен в Telegram на {phone}
+            {phone ? `Код отправлен в Telegram на ${phone}` : 'Код уже отправлен в Telegram.'}
           </p>
           <TextField
             label="Код из Telegram"
@@ -171,6 +220,7 @@ function humanizeApiError(e: unknown): string {
     if (reason === 'phone_invalid') return 'Неверный формат номера.'
     if (reason === 'wrong_account') return 'Этот аккаунт не подходит — нужен исходный.'
     if (reason === 'expired') return 'Код истёк, начните заново.'
+    if (reason === 'flow_already_active') return 'Код уже отправлен. Введите код или нажмите «Отмена», чтобы начать заново.'
   }
   return (e as Error).message ?? 'Ошибка'
 }

@@ -13,6 +13,8 @@ Lifespan order:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -71,6 +73,25 @@ from lcloud.workers import (
 )
 
 logger = logging.getLogger("lcloud")
+
+
+def schedule_post_login_scan() -> asyncio.Task[None]:
+    """Run post-login bootstrap work without blocking API startup/login."""
+    task = asyncio.create_task(
+        _post_login_scan_if_authorized(),
+        name="lcloud-post-login-scan",
+    )
+
+    def _log_result(done: asyncio.Task[None]) -> None:
+        if done.cancelled():
+            return
+        try:
+            done.result()
+        except Exception:
+            logger.exception("post-login scan task failed")
+
+    task.add_done_callback(_log_result)
+    return task
 
 
 async def _post_login_scan_if_authorized() -> None:
@@ -164,12 +185,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     manager = get_userbot_manager()
     await manager.start()
 
-    # 6. Background scan if already authorized
-    await _post_login_scan_if_authorized()
+    # 6. Background scan if already authorized. Keep FastAPI startup responsive:
+    # Telegram scanning/seed delivery can block on MTProto reconnects.
+    post_login_task = schedule_post_login_scan()
 
     try:
         yield
     finally:
+        if not post_login_task.done():
+            post_login_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await post_login_task
         await manager.stop()
         await dispose_engine()
         reset_worker_pool()
@@ -332,9 +358,15 @@ def create_app() -> FastAPI:
         # Serve index for the SPA root and any unknown GET path so client-side
         # routing works on hard-refresh. API paths are matched by their routers
         # first (Starlette tries routes in registration order).
+        def spa_index() -> FileResponse:
+            return FileResponse(
+                index_file,
+                headers={"Cache-Control": "no-store"},
+            )
+
         @app.get("/", include_in_schema=False)
         async def spa_root() -> FileResponse:
-            return FileResponse(index_file)
+            return spa_index()
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str) -> FileResponse:
@@ -355,7 +387,7 @@ def create_app() -> FastAPI:
             ):
                 if full_path.startswith(prefix):
                     raise HTTPException(404)
-            return FileResponse(index_file)
+            return spa_index()
     else:
         # Frontend not built — keep a JSON info root so the deployment is
         # still inspectable via curl.
@@ -390,9 +422,8 @@ def run() -> None:
         port=settings.lc_port,
         reload=False,
         log_level="info",
-        # Trust X-Forwarded-* from the docker bridge (shop-nginx upstream).
-        # Listening on 0.0.0.0 in production is safe because ufw blocks
-        # public access to LC_PORT; only 172.18.0.0/16 is allowed in.
+        loop="asyncio",
+        # Trust X-Forwarded-* from the local nginx reverse proxy.
         proxy_headers=True,
         forwarded_allow_ips="127.0.0.1,172.18.0.0/16",
     )

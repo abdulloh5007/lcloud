@@ -3,11 +3,13 @@ import { BuyAccountScreen } from './BuyAccountScreen'
 import { PasteSeedLogin } from './PasteSeedLogin'
 import { BootstrapAdminTGForm } from './BootstrapAdminTGForm'
 import { ForgotSeedModal } from './ForgotSeedModal'
+import type { LoginFlowState } from '@/api/types'
 import type { UserKeypair } from '@/hooks/useAuthV2'
 
 interface Props {
   userbotAuthed: boolean
   bootstrapMode: boolean
+  authFlowState: LoginFlowState
   onSignedIn: (kp: UserKeypair) => void
   onAdminConnected: () => void
 }
@@ -17,6 +19,7 @@ type Mode = 'login' | 'buy'
 export function LoginScreen({
   userbotAuthed,
   bootstrapMode,
+  authFlowState,
   onSignedIn,
   onAdminConnected,
 }: Props) {
@@ -39,7 +42,10 @@ export function LoginScreen({
                   ? 'Подключите ваш Telegram-аккаунт. После подключения юзербот пришлёт вам сид-фразу в Saved Messages.'
                   : 'Юзербот не авторизован — войдите своим Telegram-аккаунтом.'}
               </p>
-              <BootstrapAdminTGForm onAuthorized={onAdminConnected} />
+              <BootstrapAdminTGForm
+                authFlowState={authFlowState}
+                onAuthorized={onAdminConnected}
+              />
             </>
           ) : mode === 'login' ? (
             <PasteSeedLogin
@@ -56,4 +62,3 @@ export function LoginScreen({
     </>
   )
 }
-

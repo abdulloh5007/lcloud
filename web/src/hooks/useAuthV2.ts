@@ -81,7 +81,7 @@ function hexstr(b: Uint8Array): string {
  * Trade-off: an attacker with running JS in your tab can read it. Same
  * security model as any browser-held credential.
  */
-export function useAuthV2(): AuthV2HookValue {
+export function useAuthV2(enabled = true): AuthV2HookValue {
   const qc = useQueryClient()
   const [keypair, setKeypairState] = useState<UserKeypair | undefined>(
     () => readKeypair()
@@ -92,13 +92,23 @@ export function useAuthV2(): AuthV2HookValue {
     setKeypairState(kp)
   }, [])
 
-  // /auth/v2/me — drives whether we're really logged in
+  // /auth/v2/me — drives whether we're really logged in. A 401 means the
+  // visitor is anonymous; keep it out of React Query's error/refetch loop.
   const meQuery = useQuery({
     queryKey: ['v2', 'me'],
-    queryFn: getMeV2,
+    queryFn: async () => {
+      try {
+        return await getMeV2()
+      } catch (e) {
+        const status = (e as { status?: number } | null)?.status
+        if (status === 401) return null
+        throw e
+      }
+    },
     retry: false,
-    refetchOnWindowFocus: true,
-    refetchInterval: (q) => (q.state.data ? 30000 : 5000),
+    enabled,
+    refetchOnWindowFocus: false,
+    refetchInterval: (q) => (q.state.data ? 30000 : false),
   })
 
   // If /me returns 401, we're logged out — drop the in-memory keypair.
@@ -122,12 +132,12 @@ export function useAuthV2(): AuthV2HookValue {
   }, [qc, setKeypair])
 
   return {
-    me: meQuery.data,
+    me: meQuery.data ?? undefined,
     keypair,
-    isLoading: meQuery.isLoading,
-    isAuthenticated: !!meQuery.data,
+    isLoading: enabled && meQuery.isLoading,
+    isAuthenticated: meQuery.data != null,
     setKeypair,
     logout,
-    refresh: () => meQuery.refetch(),
+    refresh: () => (enabled ? meQuery.refetch() : Promise.resolve(undefined)),
   }
 }

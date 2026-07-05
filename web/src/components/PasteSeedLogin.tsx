@@ -2,7 +2,6 @@ import { useCallback, useState } from 'react'
 import { deriveKeypair, isValidSeedPhrase } from '@/auth/seed'
 import { loginWithKeypair } from '@/api/v2_client'
 import type { UserKeypair } from '@/hooks/useAuthV2'
-import { PinSetupModal } from './PinSetupModal'
 
 interface Props {
   onSuccess: (kp: UserKeypair) => void
@@ -13,18 +12,13 @@ interface Props {
 /**
  * Existing-account login: paste seed phrase → derive → challenge/verify.
  *
- * After login succeeds, if the user hasn't dismissed the PIN-setup
- * prompt for this pubkey before, we offer to encrypt the mnemonic
- * with a 4-digit PIN and ship it to the server for later recovery.
+ * After login succeeds, App receives the keypair immediately and switches to
+ * the authenticated UI. PIN recovery can be configured separately.
  */
 export function PasteSeedLogin({ onSuccess, onCreate, onForgot }: Props) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [postLoginPinPrompt, setPostLoginPinPrompt] = useState<{
-    mnemonic: string
-    keypair: UserKeypair
-  } | null>(null)
 
   const trimmed = text.trim().replace(/\s+/g, ' ')
   const valid = isValidSeedPhrase(trimmed)
@@ -41,15 +35,8 @@ export function PasteSeedLogin({ onSuccess, onCreate, onForgot }: Props) {
         privkeySeed: ident.privkeySeed,
         pubkeyHex: ident.pubkeyHex,
       }
-      // Has the user already dismissed/accepted the PIN prompt for this pubkey?
-      const dismissedKey = `pin_prompt_dismissed:${ident.pubkeyHex}`
-      const dismissed = localStorage.getItem(dismissedKey) === 'true'
-      if (!dismissed) {
-        setPostLoginPinPrompt({ mnemonic: trimmed, keypair: kp })
-      } else {
-        setText('')
-        onSuccess(kp)
-      }
+      setText('')
+      onSuccess(kp)
     } catch (e) {
       const status = (e as { status?: number } | null)?.status
       if (status === 403) {
@@ -62,25 +49,6 @@ export function PasteSeedLogin({ onSuccess, onCreate, onForgot }: Props) {
       setBusy(false)
     }
   }, [trimmed, valid, busy, onSuccess])
-
-  if (postLoginPinPrompt) {
-    return (
-      <PinSetupModal
-        modal={false}
-        mnemonic={postLoginPinPrompt.mnemonic}
-        onDone={() => {
-          localStorage.setItem(
-            `pin_prompt_dismissed:${postLoginPinPrompt.keypair.pubkeyHex}`,
-            'true'
-          )
-          const kp = postLoginPinPrompt.keypair
-          setPostLoginPinPrompt(null)
-          setText('')
-          onSuccess(kp)
-        }}
-      />
-    )
-  }
 
   return (
     <div className="space-y-4">

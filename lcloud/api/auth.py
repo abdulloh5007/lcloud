@@ -90,14 +90,12 @@ async def _issue_session_cookie(
     owner_id, epoch = await _resolve_admin_owner_id()
     token = issue_admin_token(owner_id=owner_id, auth_epoch=epoch)
     set_session_cookie(response, token)
-    # Kick off a background dialog scan now that the userbot is admin-authorized.
-    # Imported lazily to avoid a circular: main.py also imports from this module.
-    from lcloud.main import _post_login_scan_if_authorized
+    # Kick off dialog scan now that the userbot is admin-authorized. It may wait
+    # on Telegram reconnects, so schedule it instead of blocking the login HTTP
+    # response after the cookie has been issued.
+    from lcloud.main import schedule_post_login_scan
 
-    try:
-        await _post_login_scan_if_authorized()
-    except Exception:
-        logger.exception("post-login scan trigger failed (non-fatal)")
+    schedule_post_login_scan()
     return {
         "authorized": True,
         "me": {

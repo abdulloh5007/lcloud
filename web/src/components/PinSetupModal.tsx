@@ -27,10 +27,14 @@ export function PinSetupModal({ mnemonic, onDone, modal = true }: Props) {
   const [confirm, setConfirm] = useState<string[]>(["", "", "", ""]);
   const [stage, setStage] = useState<"enter" | "confirm">("enter");
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
+  const submittedPin = useRef<string | null>(null);
 
   const setupM = useMutation({
     mutationFn: (pin: string) => pinApi.setup(pin, mnemonic),
     onSuccess: () => onDone(),
+    onError: () => {
+      submittedPin.current = null;
+    },
   });
 
   // Auto-advance focus
@@ -80,7 +84,12 @@ export function PinSetupModal({ mnemonic, onDone, modal = true }: Props) {
     if (stage === "confirm" && confirm.every((d) => d !== "")) {
       const enterPin = digits.join("");
       const confirmPin = confirm.join("");
-      if (enterPin === confirmPin) {
+      if (
+        enterPin === confirmPin &&
+        !setupM.isPending &&
+        submittedPin.current !== enterPin
+      ) {
+        submittedPin.current = enterPin;
         setupM.mutate(enterPin);
       }
     }
@@ -138,6 +147,7 @@ export function PinSetupModal({ mnemonic, onDone, modal = true }: Props) {
               setConfirm(["", "", "", ""]);
               setStage("enter");
               setDigits(["", "", "", ""]);
+              submittedPin.current = null;
               setTimeout(() => inputs.current[0]?.focus(), 0);
             }}
             className="block mx-auto text-sm text-blue-600"

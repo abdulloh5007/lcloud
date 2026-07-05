@@ -15,7 +15,7 @@ import { Moon, Sun, LogOut, Menu } from "lucide-react";
 
 export function App() {
   const { data, isLoading, refresh } = useAuth();
-  const v2 = useAuthV2();
+  const v2 = useAuthV2(data?.userbot_authed === true);
   const [selectedCloud, setSelectedCloud] = useState<number | null>(null);
   const [dark, setDark] = useTheme();
   const [compressUploads, setCompressUploads] = useCompressUploads();
@@ -37,6 +37,7 @@ export function App() {
       <LoginScreen
         bootstrapMode={data?.bootstrap_mode ?? true}
         userbotAuthed={data?.userbot_authed ?? false}
+        authFlowState={data?.state ?? "no_session"}
         onSignedIn={(kp) => {
           v2.setKeypair(kp);
           void v2.refresh();

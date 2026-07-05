@@ -14,8 +14,8 @@ export function useAuth(): AuthHookValue {
   const q = useQuery({
     queryKey: ["auth", "state"],
     queryFn: () => auth.state(),
-    refetchInterval: (query) =>
-      query.state.data?.authorized ? false : 4000,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
   });
   return {
     data: q.data,
