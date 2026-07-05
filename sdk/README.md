@@ -16,6 +16,9 @@ const db = createClient({
   apiKey: process.env.LCLOUD_API_KEY,
 });
 
+const meta = await db.meta();
+console.log(meta.pagination.max_limit, meta.batch.max_writes);
+
 await db.ensureCollection("users");
 
 const users = db.collection("users");
@@ -66,6 +69,7 @@ Options:
 ### Collections
 
 ```ts
+await db.meta();
 await db.createCollection("posts");
 await db.ensureCollection("posts");
 await db.listCollections();
@@ -157,6 +161,35 @@ Delete a file:
 ```ts
 await db.file(file.id).delete();
 ```
+
+### Limits
+
+Use `db.meta()` for machine-readable server limits:
+
+```ts
+const meta = await db.meta();
+
+meta.pagination.max_limit; // 500
+meta.query.max_where_filters; // 20
+meta.batch.max_writes; // 100
+meta.media.max_upload_bytes; // deployment setting
+```
+
+Current public contract:
+
+| Area | Limit |
+| --- | --- |
+| Collection name | `^[A-Za-z][A-Za-z0-9_-]{0,63}$`, max 64 chars |
+| Document ID | `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, max 128 chars |
+| List/query page size | default 50, max 500 |
+| Query filters | max 20 `where` filters |
+| Batch writes | max 100 writes, atomic |
+| API keys | max 25 active keys per user |
+| Upload size | `meta.media.max_upload_bytes` |
+
+There is no explicit per-user DB HTTP rate limit yet. Auth login has an IP
+limit of 10 challenge/verify requests per 5 minutes. Storage is also limited by
+Telegram MTProto throttling, exposed in `meta.rate_limits.telegram_mtproto`.
 
 ### Query
 

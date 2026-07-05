@@ -108,6 +108,71 @@ export interface BatchResult<T extends JsonObject = JsonObject> {
   total: number;
 }
 
+export interface LCloudDbMeta {
+  name: string;
+  version: string;
+  documents: {
+    data_type: "json_object";
+    recommended_max_size_bytes: number;
+    patch: "shallow_top_level_merge";
+    generated_id_prefix: string;
+  };
+  collections: {
+    name_regex: string;
+    name_max_length: number;
+    reserved: string[];
+  };
+  document_ids: {
+    regex: string;
+    max_length: number;
+  };
+  pagination: {
+    default_limit: number;
+    max_limit: number;
+    offset_min: number;
+  };
+  query: {
+    max_where_filters: number;
+    max_field_path_length: number;
+    operators: WhereOp[];
+    field_paths: "dot_notation";
+    engine: string;
+    indexes: string;
+  };
+  batch: {
+    max_writes: number;
+    operations: BatchWrite["op"][];
+    atomic: boolean;
+  };
+  media: {
+    max_upload_bytes: number;
+    list_max_limit: number;
+    default_compress: boolean;
+    lc2_client_signing: string;
+  };
+  auth: {
+    methods: string[];
+    max_active_api_keys_per_user: number;
+    api_keys_safe_for_public_browser: boolean;
+    v2_login_rate_limit: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+      applies_to: string[];
+    };
+  };
+  rate_limits: {
+    db_api: string;
+    storage_api: string;
+    telegram_mtproto: {
+      rate_per_second: number;
+      burst: number;
+      max_floodwait_seconds: number;
+    };
+  };
+  not_supported_yet: string[];
+}
+
 export interface UploadProgress {
   loaded: number;
   total: number;
@@ -163,6 +228,10 @@ export class LCloudDbClient {
 
   file(id: number): FileRef {
     return new FileRef(this, id);
+  }
+
+  async meta(): Promise<LCloudDbMeta> {
+    return this.request("/api/v1/db/_meta");
   }
 
   async createCollection(name: string): Promise<CollectionRow> {

@@ -137,6 +137,18 @@ def test_json_db_crud_and_query(app_client: TestClient) -> None:
     assert missing.status_code == 404
 
 
+def test_json_db_meta_exposes_machine_readable_limits(app_client: TestClient) -> None:
+    r = app_client.get("/api/v1/db/_meta")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["pagination"]["max_limit"] == 500
+    assert body["query"]["max_where_filters"] == 20
+    assert body["batch"]["max_writes"] == 100
+    assert body["batch"]["atomic"] is True
+    assert body["media"]["max_upload_bytes"] >= 1
+    assert body["auth"]["v2_login_rate_limit"]["window_seconds"] == 300
+
+
 def test_json_db_isolated_per_user(app_client: TestClient) -> None:
     _login(app_client)
     assert app_client.post("/api/v1/db/collections", json={"name": "notes"}).status_code == 201

@@ -19,11 +19,22 @@ from fastapi import APIRouter, HTTPException, Path, Query, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lcloud import __version__
 from lcloud.auth.v2_deps import CurrentUser
+from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import JsonCollection, JsonDocument, JsonOperation
 
 router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
+
+MAX_COLLECTION_NAME_LENGTH = 64
+MAX_DOCUMENT_ID_LENGTH = 128
+MAX_DOCUMENT_LIST_LIMIT = 500
+MAX_QUERY_FILTERS = 20
+MAX_BATCH_WRITES = 100
+MAX_QUERY_FIELD_PATH_LENGTH = 128
+DEFAULT_PAGE_LIMIT = 50
+MAX_API_KEYS_PER_USER = 25
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -93,7 +104,7 @@ class BatchWriteIn(BaseModel):
 
 
 class BatchIn(BaseModel):
-    writes: list[BatchWriteIn] = Field(min_length=1, max_length=100)
+    writes: list[BatchWriteIn] = Field(min_length=1, max_length=MAX_BATCH_WRITES)
 
 
 WhereOp = Literal["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"]
@@ -106,10 +117,10 @@ class WhereIn(BaseModel):
 
 
 class QueryIn(BaseModel):
-    where: list[WhereIn] = Field(default_factory=list, max_length=20)
+    where: list[WhereIn] = Field(default_factory=list, max_length=MAX_QUERY_FILTERS)
     order_by: str | None = Field(default=None, max_length=128)
     order: Literal["asc", "desc"] = "asc"
-    limit: int = Field(default=50, ge=1, le=500)
+    limit: int = Field(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_DOCUMENT_LIST_LIMIT)
     offset: int = Field(default=0, ge=0)
 
 
@@ -270,6 +281,89 @@ def _operation(
         op=op,
         payload_json=_json_dumps(payload),
     )
+
+
+@router.get(
+    "/_meta",
+    summary="LCloud DB capabilities and limits",
+    description=(
+        "Machine-readable limits for SDKs and AI agents. Values describe the "
+        "current deployed API contract; clients should stay within them."
+    ),
+)
+async def db_meta() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "name": "LCloud DB",
+        "version": __version__,
+        "documents": {
+            "data_type": "json_object",
+            "recommended_max_size_bytes": 100 * 1024,
+            "patch": "shallow_top_level_merge",
+            "generated_id_prefix": "doc_",
+        },
+        "collections": {
+            "name_regex": NAME_RE.pattern,
+            "name_max_length": MAX_COLLECTION_NAME_LENGTH,
+            "reserved": sorted(RESERVED_COLLECTIONS),
+        },
+        "document_ids": {
+            "regex": DOC_ID_RE.pattern,
+            "max_length": MAX_DOCUMENT_ID_LENGTH,
+        },
+        "pagination": {
+            "default_limit": DEFAULT_PAGE_LIMIT,
+            "max_limit": MAX_DOCUMENT_LIST_LIMIT,
+            "offset_min": 0,
+        },
+        "query": {
+            "max_where_filters": MAX_QUERY_FILTERS,
+            "max_field_path_length": MAX_QUERY_FIELD_PATH_LENGTH,
+            "operators": ["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"],
+            "field_paths": "dot_notation",
+            "engine": "in_process_scan_over_materialized_documents",
+            "indexes": "not_user_configurable_yet",
+        },
+        "batch": {
+            "max_writes": MAX_BATCH_WRITES,
+            "operations": ["create", "set", "update", "delete"],
+            "atomic": True,
+        },
+        "media": {
+            "max_upload_bytes": settings.lc_max_file_bytes,
+            "list_max_limit": MAX_DOCUMENT_LIST_LIMIT,
+            "default_compress": True,
+            "lc2_client_signing": "optional_fields_supported",
+        },
+        "auth": {
+            "methods": ["lc_user_session_cookie", "bearer_api_key"],
+            "max_active_api_keys_per_user": MAX_API_KEYS_PER_USER,
+            "api_keys_safe_for_public_browser": False,
+            "v2_login_rate_limit": {
+                "capacity": 10,
+                "window_seconds": 300,
+                "key": "ip",
+                "applies_to": ["/auth/v2/challenge", "/auth/v2/verify"],
+            },
+        },
+        "rate_limits": {
+            "db_api": "no_explicit_per_user_rate_limit_yet",
+            "storage_api": "no_explicit_http_rate_limit_yet",
+            "telegram_mtproto": {
+                "rate_per_second": settings.lc_mtproto_rate_per_sec,
+                "burst": settings.lc_mtproto_burst,
+                "max_floodwait_seconds": settings.lc_mtproto_max_floodwait_sec,
+            },
+        },
+        "not_supported_yet": [
+            "joins",
+            "server_side_sql",
+            "realtime_subscriptions",
+            "public_document_rules",
+            "user_defined_indexes",
+            "deep_patch_merge",
+        ],
+    }
 
 
 @router.get(

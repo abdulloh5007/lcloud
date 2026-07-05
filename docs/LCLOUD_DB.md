@@ -81,6 +81,44 @@ Base URL:
 https://your-lcloud-host/api/v1/db
 ```
 
+Machine-readable limits and capabilities:
+
+```bash
+curl "$BASE/_meta"
+```
+
+Use this endpoint from SDKs, CLIs, and AI agents before generating large
+requests. It returns the live server limits for pagination, query filters,
+batch writes, upload size, auth, and rate limits.
+
+## Limits and rate limits
+
+| Area | Current limit |
+| --- | --- |
+| Collection name | `^[A-Za-z][A-Za-z0-9_-]{0,63}$`, max 64 chars |
+| Reserved collections | `collections` |
+| Document ID | `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, max 128 chars |
+| Document body | JSON object only; recommended under 100 KB |
+| List documents | `limit` default 50, max 500; `offset` min 0 |
+| Query filters | max 20 `where` filters |
+| Query field path | max 128 chars, dot notation like `profile.city` |
+| Query page size | `limit` default 50, max 500 |
+| Batch writes | max 100 writes per request |
+| Batch operations | `create`, `set`, `update`, `delete` |
+| Batch atomicity | all writes commit together or none commit |
+| File list page size | `limit` default 50, max 500 |
+| Upload size | deployment setting `LC_MAX_FILE_BYTES`; read `media.max_upload_bytes` from `_meta` |
+| API keys | max 25 active keys per user |
+| V2 login rate limit | 10 total `/auth/v2/challenge` + `/auth/v2/verify` requests per 5 minutes per IP |
+| DB HTTP rate limit | no explicit per-user DB rate limit yet |
+| Storage HTTP rate limit | no explicit HTTP rate limit yet; Telegram MTProto limiter still applies |
+| MTProto limiter | read `rate_limits.telegram_mtproto` from `_meta` |
+
+If a request gets `429`, back off and retry later. If a Telegram-backed storage
+request fails with flood-wait style errors, use exponential backoff and avoid
+parallel upload bursts. For DB writes, prefer batch writes over many individual
+requests when the operations must succeed together.
+
 ### Collections
 
 Create:
@@ -228,6 +266,9 @@ const db = createClient({
   apiKey: process.env.LCLOUD_API_KEY,
 });
 
+const meta = await db.meta();
+console.log(meta.pagination.max_limit, meta.batch.max_writes);
+
 await db.ensureCollection("users");
 
 const users = db.collection<UserDoc>("users");
@@ -360,6 +401,9 @@ Common reasons:
 | `document_not_found` | Document missing or soft-deleted |
 | `invalid_collection_name` | Collection name violates naming rules |
 | `invalid_document_id` | Document ID violates naming rules |
+| `rate_limited` | Auth/payment/recovery rate limit hit; back off before retry |
+| `file_too_large` | Upload exceeds `media.max_upload_bytes` |
+| `key_limit_reached` | User already has max active API keys |
 
 ## Design guidelines for apps
 
@@ -388,9 +432,8 @@ top-level field:
 }
 ```
 
-Do not rely on cross-document transactions yet. If your workflow requires
-atomic multi-document updates, use a backend endpoint that performs validation
-and writes in one controlled operation.
+Use `collection.batch()` for multi-document writes that must succeed or fail
+together. Keep each batch at or below `meta.batch.max_writes`.
 
 ## Current limitations
 

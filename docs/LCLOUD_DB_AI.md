@@ -19,6 +19,8 @@ const db = createClient({
   endpoint: process.env.LCLOUD_ENDPOINT!,
   apiKey: process.env.LCLOUD_API_KEY!,
 });
+
+const meta = await db.meta();
 ```
 
 Then:
@@ -50,8 +52,39 @@ await users.update("alice", { avatar_file_id: uploaded.id });
 - Do not store large files/base64 blobs in JSON documents.
 - Do not use raw `fetch` for media unless the SDK cannot be used.
 - Do not assume joins, SQL transactions, or realtime listeners exist.
+- Do not exceed `meta.batch.max_writes`, `meta.pagination.max_limit`, or
+  `meta.query.max_where_filters`.
 - Do not create collection names with spaces, slashes, or leading numbers.
 - Do not manually concatenate unescaped document IDs into URLs; use the SDK.
+
+## Live limits
+
+Always prefer the server-reported limits:
+
+```ts
+const meta = await db.meta();
+```
+
+Current contract:
+
+| Area | Limit |
+| --- | --- |
+| Collection name | `^[A-Za-z][A-Za-z0-9_-]{0,63}$`, max 64 chars |
+| Reserved collection | `collections` |
+| Document ID | `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, max 128 chars |
+| Document data | JSON object only; recommended under 100 KB |
+| List/query page size | default 50, max 500 |
+| Query filters | max 20 `where` filters |
+| Query field path | max 128 chars; dot notation |
+| Batch writes | max 100 writes; atomic all-or-nothing |
+| API keys | max 25 active keys per user |
+| Upload size | read `meta.media.max_upload_bytes` |
+| V2 login rate limit | 10 challenge/verify requests per 5 minutes per IP |
+| DB HTTP rate limit | no explicit per-user limit yet |
+| Storage HTTP rate limit | no explicit HTTP limit yet; Telegram MTProto limiter applies |
+
+If you see `429`, back off. For upload bursts, also respect
+`meta.rate_limits.telegram_mtproto`.
 
 ## Collection and document naming
 
@@ -187,6 +220,7 @@ await db.collection("posts").batch([
 ```
 
 Use batch when multiple writes must succeed or fail together.
+Never send more than `meta.batch.max_writes` writes in one batch.
 
 ## Media snippets
 
@@ -240,6 +274,7 @@ await db.file(uploaded.id).delete();
 If SDK cannot be used, call:
 
 ```text
+GET    /api/v1/db/_meta
 GET    /api/v1/db/collections
 POST   /api/v1/db/collections
 DELETE /api/v1/db/collections/{collection}
@@ -247,6 +282,7 @@ DELETE /api/v1/db/collections/{collection}
 GET    /api/v1/db/{collection}?limit=50&offset=0
 POST   /api/v1/db/{collection}
 POST   /api/v1/db/{collection}/query
+POST   /api/v1/db/{collection}/batch
 GET    /api/v1/db/{collection}/{doc_id}
 PUT    /api/v1/db/{collection}/{doc_id}
 PATCH  /api/v1/db/{collection}/{doc_id}
@@ -284,6 +320,9 @@ document_exists
 document_not_found
 invalid_collection_name
 invalid_document_id
+rate_limited
+file_too_large
+key_limit_reached
 ```
 
 ## Mapping from other databases
