@@ -20,12 +20,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lcloud import __version__
-from lcloud.auth.v2_deps import CurrentUser
+from lcloud.auth.v2_deps import CurrentUser, OptionalCurrentUser
 from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import JsonCollection, JsonDocument, JsonOperation
 
 router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
+public_router = APIRouter(prefix="/api/v1/public/db", tags=["json_db_public"])
 
 MAX_COLLECTION_NAME_LENGTH = 64
 MAX_DOCUMENT_ID_LENGTH = 128
@@ -39,6 +40,8 @@ MAX_API_KEYS_PER_USER = 25
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 RESERVED_COLLECTIONS = {"collections"}
+AccessRule = Literal["owner", "authenticated", "public"]
+ACCESS_RULES: set[str] = {"owner", "authenticated", "public"}
 
 
 class CollectionIn(BaseModel):
@@ -51,6 +54,11 @@ class CollectionIn(BaseModel):
         if name in RESERVED_COLLECTIONS or not NAME_RE.match(name):
             raise ValueError("invalid_collection_name")
         return name
+
+
+class CollectionRulesIn(BaseModel):
+    read: AccessRule = "owner"
+    write: AccessRule = "owner"
 
 
 class CreateDocIn(BaseModel):
@@ -160,6 +168,8 @@ def _serialize_collection(row: JsonCollection) -> dict[str, Any]:
         "id": row.id,
         "name": row.name,
         "owner_user_id": row.owner_user_id,
+        "read_rule": row.read_rule,
+        "write_rule": row.write_rule,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -231,6 +241,45 @@ async def _get_collection_or_404(
     if collection is None:
         raise HTTPException(404, detail={"reason": "collection_not_found"})
     return collection
+
+
+async def _get_collection_by_id_or_404(
+    sess: AsyncSession,
+    *,
+    collection_id: int,
+) -> JsonCollection:
+    collection = (
+        await sess.execute(
+            sa.select(JsonCollection).where(JsonCollection.id == collection_id)
+        )
+    ).scalar_one_or_none()
+    if collection is None:
+        raise HTTPException(404, detail={"reason": "collection_not_found"})
+    return collection
+
+
+def _can_access_collection(
+    coll: JsonCollection,
+    *,
+    user: Any | None,
+    action: Literal["read", "write"],
+) -> bool:
+    if user is not None and coll.owner_user_id == user.id:
+        return True
+    rule = coll.read_rule if action == "read" else coll.write_rule
+    if rule == "public":
+        return True
+    return bool(rule == "authenticated" and user is not None)
+
+
+def _require_collection_access(
+    coll: JsonCollection,
+    *,
+    user: Any | None,
+    action: Literal["read", "write"],
+) -> None:
+    if not _can_access_collection(coll, user=user, action=action):
+        raise HTTPException(403, detail={"reason": "access_denied"})
 
 
 async def _get_document_or_404(
@@ -329,6 +378,13 @@ async def db_meta() -> dict[str, Any]:
             "operations": ["create", "set", "update", "delete"],
             "atomic": True,
         },
+        "access_rules": {
+            "rules": ["owner", "authenticated", "public"],
+            "default_read": "owner",
+            "default_write": "owner",
+            "public_base_path": "/api/v1/public/db/{collection_id}",
+            "owner_manage_path": "/api/v1/db/collections/{collection}/rules",
+        },
         "media": {
             "max_upload_bytes": settings.lc_max_file_bytes,
             "list_max_limit": MAX_DOCUMENT_LIST_LIMIT,
@@ -417,6 +473,55 @@ async def create_collection(body: CollectionIn, user: CurrentUser) -> dict[str, 
         await sess.commit()
         await sess.refresh(row)
         return _serialize_collection(row)
+
+
+@router.get(
+    "/collections/{collection}/rules",
+    summary="Get JSON DB collection access rules",
+)
+async def get_collection_rules(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        return {
+            "collection": row.name,
+            "collection_id": row.id,
+            "read": row.read_rule,
+            "write": row.write_rule,
+            "public_base_path": f"/api/v1/public/db/{row.id}",
+        }
+
+
+@router.put(
+    "/collections/{collection}/rules",
+    summary="Update JSON DB collection access rules",
+)
+async def set_collection_rules(
+    body: CollectionRulesIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row.read_rule = body.read
+        row.write_rule = body.write
+        row.updated_at = _now()
+        sess.add(_operation(row.id, None, "rules", {"read": body.read, "write": body.write}))
+        await sess.commit()
+        await sess.refresh(row)
+        return {
+            "collection": row.name,
+            "collection_id": row.id,
+            "read": row.read_rule,
+            "write": row.write_rule,
+            "public_base_path": f"/api/v1/public/db/{row.id}",
+        }
 
 
 @router.delete(
@@ -830,4 +935,257 @@ async def delete_document(
     return Response(status_code=204)
 
 
-__all__ = ["router"]
+@public_router.get(
+    "/{collection_id}",
+    summary="Public/list-access JSON documents by collection ID",
+)
+async def public_list_documents(
+    collection_id: int,
+    user: OptionalCurrentUser,
+    limit: int = Query(default=50, ge=1, le=MAX_DOCUMENT_LIST_LIMIT),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="read")
+        base = sa.select(JsonDocument).where(
+            JsonDocument.collection_id == coll.id,
+            JsonDocument.deleted_at.is_(None),
+        )
+        total = (
+            await sess.execute(sa.select(sa.func.count()).select_from(base.subquery()))
+        ).scalar_one()
+        rows = (
+            await sess.execute(
+                base.order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars().all()
+    return {
+        "items": [_serialize_document(row) for row in rows],
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@public_router.post(
+    "/{collection_id}",
+    status_code=201,
+    summary="Public/write-access create JSON document by collection ID",
+)
+async def public_create_document(
+    collection_id: int,
+    body: CreateDocIn,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    doc_id = body.id or _new_doc_id()
+    doc_id = _validate_doc_id(doc_id)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="write")
+        existing = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+        if existing is not None and existing.deleted_at is None:
+            raise HTTPException(409, detail={"reason": "document_exists"})
+
+        now = _now()
+        if existing is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+            )
+            sess.add(row)
+        else:
+            row = existing
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
+        coll.updated_at = now
+        await sess.flush()
+        sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.post(
+    "/{collection_id}/query",
+    summary="Public/list-access query JSON documents by collection ID",
+)
+async def public_query_documents(
+    collection_id: int,
+    body: QueryIn,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="read")
+        rows = (
+            await sess.execute(
+                sa.select(JsonDocument)
+                .where(
+                    JsonDocument.collection_id == coll.id,
+                    JsonDocument.deleted_at.is_(None),
+                )
+                .order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+            )
+        ).scalars().all()
+
+    matched: list[tuple[JsonDocument, dict[str, Any]]] = []
+    for row in rows:
+        data = _json_loads(row.data_json)
+        if all(_compare(_get_field(data, w.field), w.op, w.value) for w in body.where):
+            matched.append((row, data))
+
+    if body.order_by is not None:
+        matched.sort(
+            key=lambda item: (
+                _get_field(item[1], body.order_by or "") is None,
+                _get_field(item[1], body.order_by or ""),
+            ),
+            reverse=body.order == "desc",
+        )
+
+    page = matched[body.offset : body.offset + body.limit]
+    return {
+        "items": [
+            {
+                "id": row.doc_id,
+                "collection_id": row.collection_id,
+                "data": data,
+                "version": row.version,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row, data in page
+        ],
+        "total": len(matched),
+        "limit": body.limit,
+        "offset": body.offset,
+    }
+
+
+@public_router.get(
+    "/{collection_id}/{doc_id}",
+    summary="Public/read-access get JSON document by collection ID",
+)
+async def public_get_document(
+    collection_id: int,
+    doc_id: str,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    doc_id = _validate_doc_id(doc_id)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="read")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+    return _serialize_document(row)
+
+
+@public_router.put(
+    "/{collection_id}/{doc_id}",
+    summary="Public/write-access replace JSON document by collection ID",
+)
+async def public_set_document(
+    collection_id: int,
+    doc_id: str,
+    body: SetDocIn,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="write")
+        row = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+        if row is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+                deleted_at=None,
+            )
+            sess.add(row)
+            op = "create"
+        else:
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
+            op = "set"
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.patch(
+    "/{collection_id}/{doc_id}",
+    summary="Public/write-access patch JSON document by collection ID",
+)
+async def public_patch_document(
+    collection_id: int,
+    doc_id: str,
+    body: PatchDocIn,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="write")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        data = _json_loads(row.data_json)
+        data.update(body.data)
+        row.data_json = _json_dumps(data)
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.delete(
+    "/{collection_id}/{doc_id}",
+    status_code=204,
+    response_class=Response,
+    summary="Public/write-access delete JSON document by collection ID",
+)
+async def public_delete_document(
+    collection_id: int,
+    doc_id: str,
+    user: OptionalCurrentUser,
+) -> Response:
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="write")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        row.deleted_at = now
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "delete", {}))
+        await sess.commit()
+    return Response(status_code=204)
+
+
+__all__ = ["public_router", "router"]

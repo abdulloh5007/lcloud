@@ -106,6 +106,7 @@ batch writes, upload size, auth, and rate limits.
 | Batch writes | max 100 writes per request |
 | Batch operations | `create`, `set`, `update`, `delete` |
 | Batch atomicity | all writes commit together or none commit |
+| Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
 | File list page size | `limit` default 50, max 500 |
 | Upload size | deployment setting `LC_MAX_FILE_BYTES`; read `media.max_upload_bytes` from `_meta` |
 | API keys | max 25 active keys per user |
@@ -143,6 +144,36 @@ Delete:
 curl -X DELETE "$BASE/collections/users" \
   -H "Authorization: Bearer $LCLOUD_API_KEY"
 ```
+
+Access rules:
+
+```bash
+curl -X PUT "$BASE/collections/users/rules" \
+  -H "Authorization: Bearer $LCLOUD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"read":"public","write":"owner"}'
+```
+
+Rules:
+
+| Rule | Meaning |
+| --- | --- |
+| `owner` | Only the collection owner can access |
+| `authenticated` | Any valid LCloud user session or API key can access |
+| `public` | No credentials required |
+
+Collections default to `{ "read": "owner", "write": "owner" }`. To use
+public frontend reads without exposing an API key, set `read` to `public` and
+call the public API with the returned `collection_id`:
+
+```bash
+curl "https://your-lcloud-host/api/v1/public/db/123?limit=50&offset=0"
+curl "https://your-lcloud-host/api/v1/public/db/123/doc_id"
+```
+
+Only set `write` to `public` for intentionally open forms or append-only public
+data. Public writes can be abused until per-rule validators/rate limits are
+added.
 
 ### Documents
 
@@ -272,6 +303,8 @@ console.log(meta.pagination.max_limit, meta.batch.max_writes);
 await db.ensureCollection("users");
 
 const users = db.collection<UserDoc>("users");
+const rules = await users.setRules({ read: "public", write: "owner" });
+const publicUsers = db.publicCollection<UserDoc>(rules.collection_id);
 
 await users.insert(
   { name: "Alice", role: "admin", score: 10, profile: { city: "Tashkent" } },
@@ -288,6 +321,7 @@ const page = await users.query({
 });
 
 console.log(page.items.map((row) => row.data.name));
+console.log((await publicUsers.get("alice")).data.name);
 ```
 
 Atomic batch writes:
@@ -441,7 +475,8 @@ together. Keep each batch at or below `meta.batch.max_writes`.
 - Query filtering is currently in the API process over materialized JSON rows.
 - No compound indexes exposed to users yet.
 - `PATCH` is shallow: it merges top-level fields only.
-- No document-level public rules yet; auth is per-user.
+- Access rules are collection-level only; document-level validators are not
+  implemented yet.
 - Telegram snapshot/segment flushing is planned but not active in the MVP.
 - SDK media uploads use the existing LCloud file API. Built-in client-side LC2
   signing helper is not bundled yet; advanced callers may pass LC2 fields
@@ -453,5 +488,5 @@ together. Keep each batch at or below `meta.batch.max_writes`.
 2. Snapshot compaction: periodic collection snapshots in Telegram.
 3. Indexed query definitions for larger collections.
 4. Realtime change stream over WebSocket/SSE.
-5. Access rules for public/client-side app usage.
+5. Document-level validators and per-public-route rate limits.
 6. Admin dashboard for collections/documents.

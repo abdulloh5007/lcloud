@@ -147,6 +147,7 @@ def test_json_db_meta_exposes_machine_readable_limits(app_client: TestClient) ->
     assert body["batch"]["atomic"] is True
     assert body["media"]["max_upload_bytes"] >= 1
     assert body["auth"]["v2_login_rate_limit"]["window_seconds"] == 300
+    assert body["access_rules"]["rules"] == ["owner", "authenticated", "public"]
 
 
 def test_json_db_isolated_per_user(app_client: TestClient) -> None:
@@ -166,6 +167,64 @@ def test_json_db_isolated_per_user(app_client: TestClient) -> None:
     assert r.status_code == 200
     assert r.json() == []
     assert app_client.get("/api/v1/db/notes/one").status_code == 404
+
+
+def test_json_db_public_access_rules(app_client: TestClient) -> None:
+    _login(app_client)
+    raw = app_client.post("/api/v1/keys", json={"label": "rules-test"}).json()["raw"]
+    created = app_client.post("/api/v1/db/collections", json={"name": "public_posts"})
+    assert created.status_code == 201, created.text
+    collection_id = created.json()["id"]
+    assert created.json()["read_rule"] == "owner"
+    assert created.json()["write_rule"] == "owner"
+
+    owner_doc = app_client.post(
+        "/api/v1/db/public_posts",
+        json={"id": "hello", "data": {"title": "Hello", "status": "published"}},
+    )
+    assert owner_doc.status_code == 201, owner_doc.text
+
+    rules = app_client.get("/api/v1/db/collections/public_posts/rules")
+    assert rules.status_code == 200
+    assert rules.json()["read"] == "owner"
+    assert rules.json()["public_base_path"] == f"/api/v1/public/db/{collection_id}"
+
+    app_client.cookies.clear()
+    private_read = app_client.get(f"/api/v1/public/db/{collection_id}/hello")
+    assert private_read.status_code == 403
+    private_write = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "blocked", "data": {"title": "Blocked"}},
+    )
+    assert private_write.status_code == 403
+
+    opened = app_client.put(
+        "/api/v1/db/collections/public_posts/rules",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"read": "public", "write": "public"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["read"] == "public"
+    assert opened.json()["write"] == "public"
+
+    app_client.cookies.clear()
+    public_read = app_client.get(f"/api/v1/public/db/{collection_id}/hello")
+    assert public_read.status_code == 200, public_read.text
+    assert public_read.json()["data"]["title"] == "Hello"
+
+    public_query = app_client.post(
+        f"/api/v1/public/db/{collection_id}/query",
+        json={"where": [{"field": "status", "op": "==", "value": "published"}]},
+    )
+    assert public_query.status_code == 200, public_query.text
+    assert public_query.json()["total"] == 1
+
+    public_write = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "from_browser", "data": {"title": "Browser"}},
+    )
+    assert public_write.status_code == 201, public_write.text
+    assert public_write.json()["data"]["title"] == "Browser"
 
 
 def test_json_db_bearer_api_key_auth(app_client: TestClient) -> None:

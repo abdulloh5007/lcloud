@@ -310,6 +310,8 @@ class JsonCollection(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
+    read_rule: Mapped[str] = mapped_column(String(16), nullable=False, default="owner")
+    write_rule: Mapped[str] = mapped_column(String(16), nullable=False, default="owner")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

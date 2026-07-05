@@ -18,6 +18,8 @@ export type WhereOp =
   | "contains"
   | "startsWith";
 
+export type AccessRule = "owner" | "authenticated" | "public";
+
 export interface LCloudDbOptions {
   endpoint: string;
   apiKey?: string;
@@ -28,6 +30,8 @@ export interface CollectionRow {
   id: number;
   name: string;
   owner_user_id: number;
+  read_rule: AccessRule;
+  write_rule: AccessRule;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -108,6 +112,14 @@ export interface BatchResult<T extends JsonObject = JsonObject> {
   total: number;
 }
 
+export interface CollectionRules {
+  collection: string;
+  collection_id: number;
+  read: AccessRule;
+  write: AccessRule;
+  public_base_path: string;
+}
+
 export interface LCloudDbMeta {
   name: string;
   version: string;
@@ -143,6 +155,13 @@ export interface LCloudDbMeta {
     max_writes: number;
     operations: BatchWrite["op"][];
     atomic: boolean;
+  };
+  access_rules: {
+    rules: AccessRule[];
+    default_read: AccessRule;
+    default_write: AccessRule;
+    public_base_path: string;
+    owner_manage_path: string;
   };
   media: {
     max_upload_bytes: number;
@@ -222,6 +241,12 @@ export class LCloudDbClient {
     return new CollectionRef<T>(this, name);
   }
 
+  publicCollection<T extends JsonObject = JsonObject>(
+    collectionId: number,
+  ): PublicCollectionRef<T> {
+    return new PublicCollectionRef<T>(this, collectionId);
+  }
+
   cloud(id: number): CloudRef {
     return new CloudRef(this, id);
   }
@@ -260,6 +285,20 @@ export class LCloudDbClient {
   async deleteCollection(name: string): Promise<void> {
     await this.request<void>(`/api/v1/db/collections/${encodePath(name)}`, {
       method: "DELETE",
+    });
+  }
+
+  async getCollectionRules(name: string): Promise<CollectionRules> {
+    return this.request(`/api/v1/db/collections/${encodePath(name)}/rules`);
+  }
+
+  async setCollectionRules(
+    name: string,
+    rules: { read: AccessRule; write: AccessRule },
+  ): Promise<CollectionRules> {
+    return this.request(`/api/v1/db/collections/${encodePath(name)}/rules`, {
+      method: "PUT",
+      body: JSON.stringify(rules),
     });
   }
 
@@ -491,6 +530,14 @@ export class CollectionRef<T extends JsonObject = JsonObject> {
       body: JSON.stringify({ writes }),
     });
   }
+
+  async getRules(): Promise<CollectionRules> {
+    return this.client.getCollectionRules(this.name);
+  }
+
+  async setRules(rules: { read: AccessRule; write: AccessRule }): Promise<CollectionRules> {
+    return this.client.setCollectionRules(this.name, rules);
+  }
 }
 
 export class DocumentRef<T extends JsonObject = JsonObject> {
@@ -524,6 +571,65 @@ export class DocumentRef<T extends JsonObject = JsonObject> {
 
   async delete(): Promise<void> {
     await this.client.request<void>(this.path, { method: "DELETE" });
+  }
+}
+
+export class PublicCollectionRef<T extends JsonObject = JsonObject> {
+  constructor(
+    private readonly client: LCloudDbClient,
+    private readonly collectionId: number,
+  ) {}
+
+  private get path(): string {
+    return `/api/v1/public/db/${this.collectionId}`;
+  }
+
+  async insert(data: T, id?: string): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(this.path, {
+      method: "POST",
+      body: JSON.stringify({ id, data }),
+    });
+  }
+
+  async list(input: { limit?: number; offset?: number } = {}): Promise<Page<DocumentRow<T>>> {
+    const qs = new URLSearchParams();
+    if (input.limit !== undefined) qs.set("limit", String(input.limit));
+    if (input.offset !== undefined) qs.set("offset", String(input.offset));
+    const query = qs.toString();
+    return this.client.request<Page<DocumentRow<T>>>(
+      `${this.path}${query ? `?${query}` : ""}`,
+    );
+  }
+
+  async get(id: string): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`);
+  }
+
+  async set(id: string, data: T): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ data }),
+    });
+  }
+
+  async update(id: string, data: Partial<T>): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ data }),
+    });
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.client.request<void>(`${this.path}/${encodePath(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async query(input: QueryInput): Promise<Page<DocumentRow<T>>> {
+    return this.client.request<Page<DocumentRow<T>>>(`${this.path}/query`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   }
 }
 

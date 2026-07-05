@@ -50,10 +50,14 @@ def test_migration_creates_all_tables(tmp_path: Path) -> None:
             sa.text("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
         ).all()
         names = {r[0] for r in rows}
+        collection_columns = {
+            row[1] for row in conn.execute(sa.text("PRAGMA table_info(json_collections)"))
+        }
     eng.dispose()
 
     missing = EXPECTED_TABLES - names
     assert not missing, f"missing tables: {missing}"
+    assert {"read_rule", "write_rule"} <= collection_columns
 
 
 def test_fts_trigger_indexes_inserted_files(tmp_path: Path) -> None:

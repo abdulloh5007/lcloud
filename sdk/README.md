@@ -22,6 +22,7 @@ console.log(meta.pagination.max_limit, meta.batch.max_writes);
 await db.ensureCollection("users");
 
 const users = db.collection("users");
+const rules = await users.setRules({ read: "public", write: "owner" });
 
 await users.insert({ name: "Alice", role: "admin" }, "alice");
 await users.update("alice", { online: true });
@@ -75,6 +76,29 @@ await db.ensureCollection("posts");
 await db.listCollections();
 await db.deleteCollection("posts");
 ```
+
+Access rules:
+
+```ts
+const posts = db.collection("posts");
+
+await posts.setRules({ read: "public", write: "owner" });
+const rules = await posts.getRules();
+
+const publicPosts = db.publicCollection(rules.collection_id);
+const page = await publicPosts.list({ limit: 20 });
+const post = await publicPosts.get("hello");
+```
+
+Rules:
+
+| Rule | Meaning |
+| --- | --- |
+| `owner` | Only collection owner can access |
+| `authenticated` | Any logged-in LCloud user/API key can access |
+| `public` | No credentials required |
+
+Default is `{ read: "owner", write: "owner" }`.
 
 ### Documents
 

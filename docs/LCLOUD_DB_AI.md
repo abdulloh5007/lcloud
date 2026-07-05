@@ -29,6 +29,7 @@ Then:
 await db.ensureCollection("users");
 
 const users = db.collection("users");
+const rules = await users.setRules({ read: "public", write: "owner" });
 await users.insert({ name: "Alice" }, "alice");
 const alice = await users.get("alice");
 await users.update("alice", { online: true });
@@ -43,6 +44,9 @@ const uploaded = await db.cloud(media.id).upload(fileOrBlob, {
   name: "avatar.png",
 });
 await users.update("alice", { avatar_file_id: uploaded.id });
+
+const publicUsers = db.publicCollection(rules.collection_id);
+const publicAlice = await publicUsers.get("alice");
 ```
 
 ## Never do these
@@ -77,6 +81,7 @@ Current contract:
 | Query filters | max 20 `where` filters |
 | Query field path | max 128 chars; dot notation |
 | Batch writes | max 100 writes; atomic all-or-nothing |
+| Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
 | API keys | max 25 active keys per user |
 | Upload size | read `meta.media.max_upload_bytes` |
 | V2 login rate limit | 10 challenge/verify requests per 5 minutes per IP |
@@ -125,6 +130,38 @@ user_123
 post:hello
 settings.main
 ```
+
+## Access rules
+
+Use owner endpoints with API key/cookie for private server-side work:
+
+```ts
+const posts = db.collection("posts");
+await posts.setRules({ read: "owner", write: "owner" });
+```
+
+Use public read for frontend pages that must not expose an API key:
+
+```ts
+const rules = await db.collection("posts").setRules({
+  read: "public",
+  write: "owner",
+});
+
+const publicPosts = db.publicCollection(rules.collection_id);
+const page = await publicPosts.list({ limit: 20 });
+```
+
+Rules:
+
+| Rule | Meaning |
+| --- | --- |
+| `owner` | Only collection owner can access |
+| `authenticated` | Any logged-in LCloud user/API key can access |
+| `public` | No credentials required |
+
+Do not set `write: "public"` unless the app intentionally accepts anonymous
+browser writes. Public writes need app-level validation and abuse protection.
 
 ## CRUD snippets
 
@@ -287,6 +324,14 @@ GET    /api/v1/db/{collection}/{doc_id}
 PUT    /api/v1/db/{collection}/{doc_id}
 PATCH  /api/v1/db/{collection}/{doc_id}
 DELETE /api/v1/db/{collection}/{doc_id}
+
+GET    /api/v1/public/db/{collection_id}?limit=50&offset=0
+POST   /api/v1/public/db/{collection_id}
+POST   /api/v1/public/db/{collection_id}/query
+GET    /api/v1/public/db/{collection_id}/{doc_id}
+PUT    /api/v1/public/db/{collection_id}/{doc_id}
+PATCH  /api/v1/public/db/{collection_id}/{doc_id}
+DELETE /api/v1/public/db/{collection_id}/{doc_id}
 ```
 
 Headers:

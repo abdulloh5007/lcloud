@@ -103,7 +103,39 @@ async def get_current_user(
     return user
 
 
+async def get_optional_current_user(
+    lc_user_session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> User | None:
+    """Return authenticated user when credentials are present, otherwise None."""
+    if not lc_user_session and not authorization:
+        return None
+
+    user: User | None = None
+
+    if lc_user_session:
+        user = await _user_from_cookie(lc_user_session)
+
+    if user is None and authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and ak.looks_like_api_key(token):
+            user = await _user_from_api_key(token)
+
+    if user is None:
+        raise HTTPException(
+            401,
+            detail={"reason": "invalid_credentials"},
+            headers={"WWW-Authenticate": 'Bearer realm="LCloud"'},
+        )
+
+    if user.suspended_at is not None:
+        raise HTTPException(403, detail={"reason": "suspended"})
+
+    return user
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalCurrentUser = Annotated[User | None, Depends(get_optional_current_user)]
 
 
 def require_user_admin(user: CurrentUser) -> User:
@@ -119,6 +151,8 @@ CurrentUserAdmin = Annotated[User, Depends(require_user_admin)]
 __all__ = [
     "CurrentUser",
     "CurrentUserAdmin",
+    "OptionalCurrentUser",
     "get_current_user",
+    "get_optional_current_user",
     "require_user_admin",
 ]
