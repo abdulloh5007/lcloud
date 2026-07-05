@@ -14,6 +14,8 @@ import {
   Download,
   Trash2,
   Upload,
+  Plus,
+  X,
   FileIcon,
   Image,
   Film,
@@ -49,11 +51,41 @@ interface ProgressItem {
   error?: string;
 }
 
+type UploadPreviewKind = "image" | "video" | "audio" | "file";
+
+interface UploadQueueItem {
+  id: string;
+  file: File;
+  previewUrl: string | null;
+  kind: UploadPreviewKind;
+}
+
 interface Page {
   items: FileRow[];
   total: number;
   limit: number;
   offset: number;
+}
+
+function previewKind(file: File): UploadPreviewKind {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function makeQueueItem(file: File): UploadQueueItem {
+  const kind = previewKind(file);
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+    file,
+    previewUrl: kind === "file" ? null : URL.createObjectURL(file),
+    kind,
+  };
+}
+
+function revokeQueueItem(item: UploadQueueItem) {
+  if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
 }
 
 export function FilesPanel({ cloudId, compressUploads }: Props) {
@@ -62,8 +94,29 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
   const [query, setQuery] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [progress, setProgress] = useState<Record<string, ProgressItem>>({});
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileRow | null>(null);
+  const uploadQueueRef = useRef<UploadQueueItem[]>([]);
+  const queuedBytes = useMemo(
+    () => uploadQueue.reduce((sum, item) => sum + item.file.size, 0),
+    [uploadQueue],
+  );
+  const hasActiveUploads = useMemo(
+    () => Object.values(progress).some((item) => !item.error),
+    [progress],
+  );
+
+  useEffect(() => {
+    uploadQueueRef.current = uploadQueue;
+  }, [uploadQueue]);
+
+  useEffect(
+    () => () => {
+      uploadQueueRef.current.forEach(revokeQueueItem);
+    },
+    [],
+  );
 
   // Close preview on Escape
   useEffect(() => {
@@ -191,14 +244,47 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  async function handleFiles(filesIn: FileList | File[]) {
+  function addPendingFiles(filesIn: FileList | File[]) {
     if (cloudId === null) {
       window.alert("Выберите cloud в сайдбаре, чтобы загрузить файлы.");
       return;
     }
     const arr = Array.from(filesIn);
-    for (const f of arr) {
-      const key = `${f.name}-${Date.now()}-${Math.random()}`;
+    if (arr.length === 0) return;
+    setUploadQueue((current) => [
+      ...current,
+      ...arr.map((file) => makeQueueItem(file)),
+    ]);
+  }
+
+  function removeQueuedFile(id: string) {
+    setUploadQueue((current) => {
+      const item = current.find((queued) => queued.id === id);
+      if (item) revokeQueueItem(item);
+      return current.filter((queued) => queued.id !== id);
+    });
+  }
+
+  function clearQueue() {
+    setUploadQueue((current) => {
+      current.forEach(revokeQueueItem);
+      return [];
+    });
+  }
+
+  async function uploadQueuedFiles() {
+    if (cloudId === null) {
+      window.alert("Выберите cloud в сайдбаре, чтобы загрузить файлы.");
+      return;
+    }
+    const batch = uploadQueueRef.current;
+    if (batch.length === 0) return;
+
+    setUploadQueue([]);
+    for (const item of batch) {
+      const f = item.file;
+      const key = item.id;
+      revokeQueueItem(item);
       setProgress((p) => ({
         ...p,
         [key]: { name: f.name, loaded: 0, total: f.size, phase: "signing" },
@@ -235,6 +321,7 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
     }
     qc.invalidateQueries({ queryKey: ["files"] });
     qc.invalidateQueries({ queryKey: ["search"] });
+    qc.invalidateQueries({ queryKey: ["v2", "quota"] });
   }
 
   return (
@@ -278,8 +365,8 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
           onClick={() => fileInputRef.current?.click()}
           disabled={cloudId === null}
         >
-          <Upload size={16} />
-          <span className="hidden sm:inline">Загрузить</span>
+          <Plus size={16} />
+          <span className="hidden sm:inline">Добавить</span>
         </Button>
         <input
           ref={fileInputRef}
@@ -287,11 +374,57 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
           multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files) void handleFiles(e.target.files);
+            if (e.target.files) addPendingFiles(e.target.files);
             e.target.value = "";
           }}
         />
       </div>
+
+      {uploadQueue.length > 0 && (
+        <section className="border-b border-neutral-200 dark:border-neutral-800 bg-panel/70 dark:bg-panel-dark/70 px-3 sm:px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                К загрузке
+              </div>
+              <div className="text-xs text-neutral-500 tabular-nums">
+                {uploadQueue.length} файл(ов), {formatBytes(queuedBytes)}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={clearQueue}
+              >
+                <X size={14} />
+                <span className="hidden sm:inline">Очистить</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void uploadQueuedFiles()}
+                disabled={
+                  cloudId === null || uploadQueue.length === 0 || hasActiveUploads
+                }
+              >
+                <Upload size={14} />
+                <span>Загрузить {uploadQueue.length}</span>
+              </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(150px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2">
+            {uploadQueue.map((item) => (
+              <QueuedUploadCard
+                key={item.id}
+                item={item}
+                onRemove={() => removeQueuedFile(item.id)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {Object.keys(progress).length > 0 && (
         <div className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-2 space-y-1.5">
@@ -362,10 +495,15 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
           e.preventDefault();
           setDragOver(false);
           if (cloudId !== null && e.dataTransfer.files) {
-            void handleFiles(e.dataTransfer.files);
+            addPendingFiles(e.dataTransfer.files);
           }
         }}
       >
+        {dragOver && (
+          <div className="pointer-events-none sticky top-0 z-10 mb-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/95 dark:bg-blue-950/90 px-3 py-2 text-sm text-blue-700 dark:text-blue-200">
+            Отпустите файлы, чтобы добавить их в очередь.
+          </div>
+        )}
         {list.isLoading && (
           <div className="text-sm text-neutral-500">…</div>
         )}
@@ -380,7 +518,7 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
             <p className="mb-1 text-center px-4">
               {cloudId === null
                 ? "Введите запрос или выберите cloud."
-                : "Нет файлов. Перетащите сюда или нажмите «Загрузить»."}
+                : "Нет файлов. Перетащите сюда несколько файлов или нажмите «Добавить»."}
             </p>
           </div>
         )}
@@ -491,6 +629,70 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
         />
       )}
     </main>
+  );
+}
+
+function QueuedUploadCard({
+  item,
+  onRemove,
+}: {
+  item: UploadQueueItem;
+  onRemove: () => void;
+}) {
+  const Icon = mimeIcon(item.file.type);
+
+  return (
+    <div className="relative min-w-0 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-bg dark:bg-bg-dark p-2">
+      <button
+        type="button"
+        className="absolute right-1.5 top-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/90 text-neutral-600 shadow-sm ring-1 ring-black/5 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-900/90 dark:text-neutral-300 dark:ring-white/10 dark:hover:bg-red-950/50"
+        onClick={onRemove}
+        aria-label={`Убрать ${item.file.name} из очереди`}
+        title="Убрать из очереди"
+      >
+        <X size={14} />
+      </button>
+      <div className="aspect-[4/3] overflow-hidden rounded-md bg-neutral-100 dark:bg-neutral-900">
+        {item.kind === "image" && item.previewUrl ? (
+          <img
+            src={item.previewUrl}
+            alt={item.file.name}
+            className="h-full w-full object-cover"
+          />
+        ) : item.kind === "video" && item.previewUrl ? (
+          <video
+            src={item.previewUrl}
+            className="h-full w-full object-cover"
+            muted
+            preload="metadata"
+          />
+        ) : item.kind === "audio" && item.previewUrl ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-2">
+            <Music size={30} className="text-neutral-400" />
+            <audio
+              src={item.previewUrl}
+              controls
+              className="h-8 w-full max-w-full"
+            />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Icon size={42} className="text-neutral-400" />
+          </div>
+        )}
+      </div>
+      <div className="mt-2 min-w-0">
+        <div
+          className="truncate text-xs font-medium text-neutral-900 dark:text-neutral-100"
+          title={item.file.name}
+        >
+          {item.file.name}
+        </div>
+        <div className="mt-0.5 text-xs text-neutral-500 tabular-nums">
+          {formatBytes(item.file.size)}
+        </div>
+      </div>
+    </div>
   );
 }
 
