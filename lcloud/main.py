@@ -34,6 +34,7 @@ from lcloud.api import (
     clouds_router,
     file_tags_router,
     files_router,
+    json_db_router,
     magic_router,
     payments_admin_router,
     payments_public_router,
@@ -247,6 +248,14 @@ APP_DESCRIPTION = """
 
 TAGS_METADATA = [
     {
+        "name": "json_db",
+        "description": (
+            "LCloud DB: JSON collections/documents API. SQLite is the fast "
+            "query layer; append-only JSON operation logs are designed for "
+            "future Telegram snapshot/segment persistence."
+        ),
+    },
+    {
         "name": "auth_v2",
         "description": (
             "**BIP39 seed-phrase login**. Клиент держит приватный ключ, "
@@ -320,6 +329,7 @@ def create_app() -> FastAPI:
     app.include_router(v2_clouds_router)
     app.include_router(v2_clouds_files_router)
     app.include_router(v2_files_router)
+    app.include_router(json_db_router)
     app.include_router(versions_router)
     app.include_router(shares_router)
     app.include_router(public_share_router)
@@ -374,6 +384,7 @@ def create_app() -> FastAPI:
             # route should 404, not silently return the SPA index.
             for prefix in (
                 "auth/",
+                "api/",
                 "admin",
                 "clouds",
                 "files/",

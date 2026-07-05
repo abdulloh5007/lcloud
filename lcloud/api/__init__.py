@@ -8,6 +8,7 @@ from lcloud.api.files import (
     clouds_files_router,
     files_router,
 )
+from lcloud.api.json_db import router as json_db_router
 from lcloud.api.magic import router as magic_router
 from lcloud.api.payments import admin_router as payments_admin_router
 from lcloud.api.payments import public_router as payments_public_router
@@ -35,6 +36,7 @@ __all__ = [
     "clouds_router",
     "file_tags_router",
     "files_router",
+    "json_db_router",
     "magic_router",
     "payments_admin_router",
     "payments_public_router",

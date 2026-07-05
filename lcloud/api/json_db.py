@@ -1,0 +1,569 @@
+"""LCloud DB: small JSON document database API.
+
+This is the first public shape of "Telegram-backed DB" support. The current
+implementation uses SQLite as the materialized index/query layer and writes an
+append-only operation log. That log is intentionally JSONL-friendly so a later
+worker can flush segments/snapshots to Telegram without changing the API.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import secrets
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+import sqlalchemy as sa
+from fastapi import APIRouter, HTTPException, Path, Query, Response
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from lcloud.auth.v2_deps import CurrentUser
+from lcloud.db.base import get_sessionmaker
+from lcloud.db.models import JsonCollection, JsonDocument, JsonOperation
+
+router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
+
+NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+RESERVED_COLLECTIONS = {"collections"}
+
+
+class CollectionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        name = value.strip()
+        if name in RESERVED_COLLECTIONS or not NAME_RE.match(name):
+            raise ValueError("invalid_collection_name")
+        return name
+
+
+class CreateDocIn(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=128)
+    data: dict[str, Any]
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        doc_id = value.strip()
+        if not DOC_ID_RE.match(doc_id):
+            raise ValueError("invalid_document_id")
+        return doc_id
+
+
+class SetDocIn(BaseModel):
+    data: dict[str, Any]
+
+
+class PatchDocIn(BaseModel):
+    data: dict[str, Any]
+
+
+WhereOp = Literal["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"]
+
+
+class WhereIn(BaseModel):
+    field: str = Field(min_length=1, max_length=128)
+    op: WhereOp = "=="
+    value: Any
+
+
+class QueryIn(BaseModel):
+    where: list[WhereIn] = Field(default_factory=list, max_length=20)
+    order_by: str | None = Field(default=None, max_length=128)
+    order: Literal["asc", "desc"] = "asc"
+    limit: int = Field(default=50, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _json_loads(raw: str) -> dict[str, Any]:
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        raise ValueError("stored JSON document is not an object")
+    return loaded
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _new_doc_id() -> str:
+    return f"doc_{secrets.token_urlsafe(12).replace('-', '').replace('_', '')[:16]}"
+
+
+def _validate_collection_name(collection: str) -> str:
+    if collection in RESERVED_COLLECTIONS or not NAME_RE.match(collection):
+        raise HTTPException(422, detail={"reason": "invalid_collection_name"})
+    return collection
+
+
+def _validate_doc_id(doc_id: str) -> str:
+    if not DOC_ID_RE.match(doc_id):
+        raise HTTPException(422, detail={"reason": "invalid_document_id"})
+    return doc_id
+
+
+def _serialize_collection(row: JsonCollection) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "owner_user_id": row.owner_user_id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_document(row: JsonDocument) -> dict[str, Any]:
+    return {
+        "id": row.doc_id,
+        "collection_id": row.collection_id,
+        "data": _json_loads(row.data_json),
+        "version": row.version,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _get_field(data: dict[str, Any], field_path: str) -> Any:
+    current: Any = data
+    for part in field_path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _compare(left: Any, op: WhereOp, right: Any) -> bool:
+    if op == "==":
+        return bool(left == right)
+    if op == "!=":
+        return bool(left != right)
+    if op == "contains":
+        if isinstance(left, str):
+            return str(right) in left
+        if isinstance(left, list):
+            return right in left
+        return False
+    if op == "startsWith":
+        return isinstance(left, str) and left.startswith(str(right))
+    if left is None:
+        return False
+    try:
+        if op == "<":
+            return bool(left < right)
+        if op == "<=":
+            return bool(left <= right)
+        if op == ">":
+            return bool(left > right)
+        if op == ">=":
+            return bool(left >= right)
+    except TypeError:
+        return False
+    return False
+
+
+async def _get_collection_or_404(
+    sess: AsyncSession,
+    *,
+    user_id: int,
+    name: str,
+) -> JsonCollection:
+    collection = (
+        await sess.execute(
+            sa.select(JsonCollection).where(
+                JsonCollection.owner_user_id == user_id,
+                JsonCollection.name == name,
+            )
+        )
+    ).scalar_one_or_none()
+    if collection is None:
+        raise HTTPException(404, detail={"reason": "collection_not_found"})
+    return collection
+
+
+async def _get_document_or_404(
+    sess: AsyncSession,
+    *,
+    collection_id: int,
+    doc_id: str,
+) -> JsonDocument:
+    row = (
+        await sess.execute(
+            sa.select(JsonDocument).where(
+                JsonDocument.collection_id == collection_id,
+                JsonDocument.doc_id == doc_id,
+                JsonDocument.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, detail={"reason": "document_not_found"})
+    return row
+
+
+def _operation(
+    collection_id: int,
+    doc_id: str | None,
+    op: str,
+    payload: dict[str, Any],
+) -> JsonOperation:
+    return JsonOperation(
+        collection_id=collection_id,
+        doc_id=doc_id,
+        op=op,
+        payload_json=_json_dumps(payload),
+    )
+
+
+@router.get(
+    "/collections",
+    summary="List JSON DB collections",
+    description="Returns collections owned by the current V2 user.",
+)
+async def list_collections(user: CurrentUser) -> list[dict[str, Any]]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        rows = (
+            await sess.execute(
+                sa.select(JsonCollection)
+                .where(JsonCollection.owner_user_id == user.id)
+                .order_by(JsonCollection.updated_at.desc(), JsonCollection.id.desc())
+            )
+        ).scalars().all()
+    return [_serialize_collection(row) for row in rows]
+
+
+@router.post(
+    "/collections",
+    status_code=201,
+    summary="Create JSON DB collection",
+)
+async def create_collection(body: CollectionIn, user: CurrentUser) -> dict[str, Any]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        existing = (
+            await sess.execute(
+                sa.select(JsonCollection).where(
+                    JsonCollection.owner_user_id == user.id,
+                    JsonCollection.name == body.name,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(409, detail={"reason": "collection_exists"})
+        now = _now()
+        row = JsonCollection(owner_user_id=user.id, name=body.name, updated_at=now)
+        sess.add(row)
+        await sess.flush()
+        sess.add(
+            _operation(
+                row.id,
+                None,
+                "collection",
+                {"action": "create", "name": body.name},
+            )
+        )
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_collection(row)
+
+
+@router.delete(
+    "/collections/{collection}",
+    status_code=204,
+    response_class=Response,
+    summary="Delete JSON DB collection",
+)
+async def delete_collection(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> Response:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        await sess.delete(row)
+        await sess.commit()
+    return Response(status_code=204)
+
+
+@router.get(
+    "/{collection}",
+    summary="List documents in a collection",
+)
+async def list_documents(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        base = sa.select(JsonDocument).where(
+            JsonDocument.collection_id == coll.id,
+            JsonDocument.deleted_at.is_(None),
+        )
+        total = (
+            await sess.execute(
+                sa.select(sa.func.count()).select_from(base.subquery())
+            )
+        ).scalar_one()
+        rows = (
+            await sess.execute(
+                base.order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars().all()
+    return {
+        "items": [_serialize_document(row) for row in rows],
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post(
+    "/{collection}",
+    status_code=201,
+    summary="Create JSON document",
+)
+async def create_document(
+    body: CreateDocIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    doc_id = body.id or _new_doc_id()
+    _validate_doc_id(doc_id)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        existing = (
+            await sess.execute(
+                sa.select(JsonDocument).where(
+                    JsonDocument.collection_id == coll.id,
+                    JsonDocument.doc_id == doc_id,
+                    JsonDocument.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(409, detail={"reason": "document_exists"})
+
+        now = _now()
+        row = JsonDocument(
+            collection_id=coll.id,
+            doc_id=doc_id,
+            data_json=_json_dumps(body.data),
+            version=1,
+            updated_at=now,
+        )
+        coll.updated_at = now
+        sess.add(row)
+        await sess.flush()
+        sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@router.post(
+    "/{collection}/query",
+    summary="Query JSON documents",
+    description=(
+        "MVP query engine over materialized JSON documents. Supports simple "
+        "field paths like `profile.city`, equality/range/string/list filters, "
+        "ordering, limit, and offset."
+    ),
+)
+async def query_documents(
+    body: QueryIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        rows = (
+            await sess.execute(
+                sa.select(JsonDocument)
+                .where(
+                    JsonDocument.collection_id == coll.id,
+                    JsonDocument.deleted_at.is_(None),
+                )
+                .order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+            )
+        ).scalars().all()
+
+    matched: list[tuple[JsonDocument, dict[str, Any]]] = []
+    for row in rows:
+        data = _json_loads(row.data_json)
+        if all(_compare(_get_field(data, w.field), w.op, w.value) for w in body.where):
+            matched.append((row, data))
+
+    order_by = body.order_by
+    if order_by is not None:
+        matched.sort(
+            key=lambda item: (
+                _get_field(item[1], order_by) is None,
+                _get_field(item[1], order_by),
+            ),
+            reverse=body.order == "desc",
+        )
+
+    page = matched[body.offset : body.offset + body.limit]
+    return {
+        "items": [
+            {
+                "id": row.doc_id,
+                "collection_id": row.collection_id,
+                "data": data,
+                "version": row.version,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row, data in page
+        ],
+        "total": len(matched),
+        "limit": body.limit,
+        "offset": body.offset,
+    }
+
+
+@router.get(
+    "/{collection}/{doc_id}",
+    summary="Get JSON document",
+)
+async def get_document(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    doc_id: str = Path(..., min_length=1, max_length=128),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+    return _serialize_document(row)
+
+
+@router.put(
+    "/{collection}/{doc_id}",
+    summary="Replace JSON document",
+)
+async def set_document(
+    body: SetDocIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    doc_id: str = Path(..., min_length=1, max_length=128),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row = (
+            await sess.execute(
+                sa.select(JsonDocument).where(
+                    JsonDocument.collection_id == coll.id,
+                    JsonDocument.doc_id == doc_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+                deleted_at=None,
+            )
+            sess.add(row)
+            op = "create"
+        else:
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
+            op = "set"
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@router.patch(
+    "/{collection}/{doc_id}",
+    summary="Patch JSON document",
+)
+async def patch_document(
+    body: PatchDocIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    doc_id: str = Path(..., min_length=1, max_length=128),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        data = _json_loads(row.data_json)
+        data.update(body.data)
+        row.data_json = _json_dumps(data)
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@router.delete(
+    "/{collection}/{doc_id}",
+    status_code=204,
+    response_class=Response,
+    summary="Delete JSON document",
+)
+async def delete_document(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    doc_id: str = Path(..., min_length=1, max_length=128),
+) -> Response:
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        row.deleted_at = now
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "delete", {}))
+        await sess.commit()
+    return Response(status_code=204)
+
+
+__all__ = ["router"]

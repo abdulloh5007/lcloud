@@ -294,3 +294,85 @@ class AuthChallenge(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class JsonCollection(Base):
+    """Document-DB collection owned by a V2 user.
+
+    SQLite is the fast query/index layer. `JsonOperation` is the durable
+    append-only log format we can later flush to Telegram as JSONL segments.
+    """
+
+    __tablename__ = "json_collections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "name",
+            name="uq_json_collections_owner_name",
+        ),
+    )
+
+
+class JsonDocument(Base):
+    """Current materialized state of one JSON document."""
+
+    __tablename__ = "json_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collection_id: Mapped[int] = mapped_column(
+        ForeignKey("json_collections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    doc_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "collection_id",
+            "doc_id",
+            name="uq_json_documents_collection_doc",
+        ),
+    )
+
+
+class JsonOperation(Base):
+    """Append-only operation log for replay, audit, and future TG snapshots."""
+
+    __tablename__ = "json_operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collection_id: Mapped[int] = mapped_column(
+        ForeignKey("json_collections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    doc_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    op: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
