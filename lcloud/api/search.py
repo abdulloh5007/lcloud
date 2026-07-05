@@ -1,19 +1,62 @@
-"""Search router: name-FTS5 + tag intersection over a single owner's files."""
+"""Search router: name-FTS5 + tag intersection over a user's files."""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query
 
 from lcloud.auth.deps import require_admin
+from lcloud.auth.v2_deps import get_current_user
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, File, FileTag
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+@dataclass(frozen=True)
+class SearchPrincipal:
+    kind: str
+    user_id: int | None = None
+    user_role: str | None = None
+    owner_id: int | None = None
+
+
+async def _search_principal(
+    lc_user_session: str | None = Cookie(default=None),
+    lc_session: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
+) -> SearchPrincipal:
+    """Accept modern V2 auth first, then legacy admin cookie for old routes."""
+    v2_attempted = bool(lc_user_session or authorization)
+    if v2_attempted:
+        try:
+            user = await get_current_user(
+                lc_user_session=lc_user_session,
+                authorization=authorization,
+            )
+            return SearchPrincipal(
+                kind="v2",
+                user_id=user.id,
+                user_role=user.role,
+            )
+        except HTTPException as exc:
+            if not lc_session:
+                raise exc
+
+    if lc_session:
+        owner_id = await require_admin(lc_session)
+        return SearchPrincipal(kind="legacy", owner_id=owner_id)
+
+    raise HTTPException(
+        401,
+        detail={"reason": "no_credentials"},
+        headers={"WWW-Authenticate": 'Bearer realm="LCloud"'},
+    )
 
 
 def _serialize_file(f: File) -> dict[str, Any]:
@@ -47,7 +90,7 @@ async def search(
     tag: list[int] | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    owner_id: int = Depends(require_admin),
+    principal: SearchPrincipal = Depends(_search_principal),
 ) -> dict[str, Any]:
     """List files that match name (FTS5) AND are in `cloud_id` (if given)
     AND have ALL `tag` ids (intersection). Soft-deleted files excluded."""
@@ -58,8 +101,12 @@ async def search(
     stmt = (
         sa.select(File)
         .join(Cloud, Cloud.id == File.cloud_id)
-        .where(File.owner_id == owner_id, File.deleted_at.is_(None))
+        .where(File.deleted_at.is_(None))
     )
+    if principal.kind == "legacy":
+        stmt = stmt.where(File.owner_id == principal.owner_id)
+    elif principal.user_role != "admin":
+        stmt = stmt.where(File.owner_user_id == principal.user_id)
     if cloud_id is not None:
         stmt = stmt.where(File.cloud_id == cloud_id)
 
