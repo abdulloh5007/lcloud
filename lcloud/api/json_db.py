@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, HTTPException, Path, Query, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from lcloud.auth.v2_deps import CurrentUser, OptionalCurrentUser
 from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import JsonCollection, JsonDocument, JsonOperation
+from lcloud.utils.rate_limit import RateLimiter
 
 router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
 public_router = APIRouter(prefix="/api/v1/public/db", tags=["json_db_public"])
@@ -36,12 +37,22 @@ MAX_BATCH_WRITES = 100
 MAX_QUERY_FIELD_PATH_LENGTH = 128
 DEFAULT_PAGE_LIMIT = 50
 MAX_API_KEYS_PER_USER = 25
+MAX_VALIDATOR_BYTES = 1024 * 1024
+PUBLIC_READ_RATE_LIMIT = 120
+PUBLIC_WRITE_RATE_LIMIT = 30
+PUBLIC_RATE_WINDOW_SECONDS = 60
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 RESERVED_COLLECTIONS = {"collections"}
 AccessRule = Literal["owner", "authenticated", "public"]
-ACCESS_RULES: set[str] = {"owner", "authenticated", "public"}
+ACCESS_RULES = ("owner", "authenticated", "public")
+_public_read_rate = RateLimiter(
+    capacity=PUBLIC_READ_RATE_LIMIT, refill_seconds=PUBLIC_RATE_WINDOW_SECONDS
+)
+_public_write_rate = RateLimiter(
+    capacity=PUBLIC_WRITE_RATE_LIMIT, refill_seconds=PUBLIC_RATE_WINDOW_SECONDS
+)
 
 
 class CollectionIn(BaseModel):
@@ -59,6 +70,37 @@ class CollectionIn(BaseModel):
 class CollectionRulesIn(BaseModel):
     read: AccessRule = "owner"
     write: AccessRule = "owner"
+
+
+class WriteValidatorIn(BaseModel):
+    max_bytes: int | None = Field(default=None, ge=1, le=MAX_VALIDATOR_BYTES)
+    max_fields: int | None = Field(default=None, ge=1, le=200)
+    required_fields: list[str] = Field(default_factory=list, max_length=100)
+    allowed_fields: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator("required_fields", "allowed_fields")
+    @classmethod
+    def validate_fields(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            field = value.strip()
+            if not field or len(field) > MAX_QUERY_FIELD_PATH_LENGTH:
+                raise ValueError("invalid_field_name")
+            if "." in field:
+                raise ValueError("validator_fields_are_top_level_only")
+            if field not in seen:
+                cleaned.append(field)
+                seen.add(field)
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_validator(self) -> WriteValidatorIn:
+        allowed = set(self.allowed_fields)
+        required = set(self.required_fields)
+        if allowed and not required.issubset(allowed):
+            raise ValueError("required_fields_must_be_allowed")
+        return self
 
 
 class CreateDocIn(BaseModel):
@@ -170,6 +212,7 @@ def _serialize_collection(row: JsonCollection) -> dict[str, Any]:
         "owner_user_id": row.owner_user_id,
         "read_rule": row.read_rule,
         "write_rule": row.write_rule,
+        "write_validator": _load_write_validator(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -222,6 +265,99 @@ def _compare(left: Any, op: WhereOp, right: Any) -> bool:
     except TypeError:
         return False
     return False
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_public_rate(request: Request, *, action: Literal["read", "write"]) -> None:
+    limiter = _public_read_rate if action == "read" else _public_write_rate
+    limit = PUBLIC_READ_RATE_LIMIT if action == "read" else PUBLIC_WRITE_RATE_LIMIT
+    if not limiter.try_acquire(f"{action}:{_client_ip(request)}"):
+        raise HTTPException(
+            429,
+            detail={
+                "reason": "rate_limited",
+                "scope": f"public_{action}",
+                "limit": limit,
+                "window_seconds": PUBLIC_RATE_WINDOW_SECONDS,
+            },
+        )
+
+
+def reset_json_db_public_rate_limits() -> None:
+    _public_read_rate.reset()
+    _public_write_rate.reset()
+
+
+def _load_write_validator(coll: JsonCollection) -> dict[str, Any] | None:
+    raw = getattr(coll, "write_validator_json", None)
+    if not raw:
+        return None
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        return None
+    return loaded
+
+
+def _validate_public_write(coll: JsonCollection, data: dict[str, Any]) -> None:
+    validator = _load_write_validator(coll)
+    if validator is None:
+        return
+
+    max_bytes = validator.get("max_bytes")
+    if isinstance(max_bytes, int):
+        size = len(_json_dumps(data).encode("utf-8"))
+        if size > max_bytes:
+            raise HTTPException(
+                422,
+                detail={
+                    "reason": "public_validator_failed",
+                    "check": "max_bytes",
+                    "size": size,
+                    "limit": max_bytes,
+                },
+            )
+
+    max_fields = validator.get("max_fields")
+    if isinstance(max_fields, int) and len(data) > max_fields:
+        raise HTTPException(
+            422,
+            detail={
+                "reason": "public_validator_failed",
+                "check": "max_fields",
+                "size": len(data),
+                "limit": max_fields,
+            },
+        )
+
+    required = validator.get("required_fields")
+    if isinstance(required, list):
+        missing = sorted(field for field in required if isinstance(field, str) and field not in data)
+        if missing:
+            raise HTTPException(
+                422,
+                detail={
+                    "reason": "public_validator_failed",
+                    "check": "required_fields",
+                    "missing": missing,
+                },
+            )
+
+    allowed = validator.get("allowed_fields")
+    if isinstance(allowed, list) and allowed:
+        allowed_set = {field for field in allowed if isinstance(field, str)}
+        extra = sorted(set(data) - allowed_set)
+        if extra:
+            raise HTTPException(
+                422,
+                detail={
+                    "reason": "public_validator_failed",
+                    "check": "allowed_fields",
+                    "extra": extra,
+                },
+            )
 
 
 async def _get_collection_or_404(
@@ -379,11 +515,32 @@ async def db_meta() -> dict[str, Any]:
             "atomic": True,
         },
         "access_rules": {
-            "rules": ["owner", "authenticated", "public"],
+            "rules": list(ACCESS_RULES),
             "default_read": "owner",
             "default_write": "owner",
             "public_base_path": "/api/v1/public/db/{collection_id}",
             "owner_manage_path": "/api/v1/db/collections/{collection}/rules",
+            "write_validator_path": "/api/v1/db/collections/{collection}/validator",
+            "public_read_rate_limit": {
+                "capacity": PUBLIC_READ_RATE_LIMIT,
+                "window_seconds": PUBLIC_RATE_WINDOW_SECONDS,
+                "key": "ip",
+            },
+            "public_write_rate_limit": {
+                "capacity": PUBLIC_WRITE_RATE_LIMIT,
+                "window_seconds": PUBLIC_RATE_WINDOW_SECONDS,
+                "key": "ip",
+            },
+            "write_validator": {
+                "max_configurable_bytes": MAX_VALIDATOR_BYTES,
+                "fields": [
+                    "max_bytes",
+                    "max_fields",
+                    "required_fields",
+                    "allowed_fields",
+                ],
+                "scope": "public_create_set_patch",
+            },
         },
         "media": {
             "max_upload_bytes": settings.lc_max_file_bytes,
@@ -522,6 +679,72 @@ async def set_collection_rules(
             "write": row.write_rule,
             "public_base_path": f"/api/v1/public/db/{row.id}",
         }
+
+
+@router.get(
+    "/collections/{collection}/validator",
+    summary="Get JSON DB public write validator",
+)
+async def get_collection_validator(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        return {
+            "collection": row.name,
+            "collection_id": row.id,
+            "validator": _load_write_validator(row),
+        }
+
+
+@router.put(
+    "/collections/{collection}/validator",
+    summary="Set JSON DB public write validator",
+)
+async def set_collection_validator(
+    body: WriteValidatorIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    validator = body.model_dump()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row.write_validator_json = _json_dumps(validator)
+        row.updated_at = _now()
+        sess.add(_operation(row.id, None, "validator", {"validator": validator}))
+        await sess.commit()
+        await sess.refresh(row)
+        return {
+            "collection": row.name,
+            "collection_id": row.id,
+            "validator": _load_write_validator(row),
+        }
+
+
+@router.delete(
+    "/collections/{collection}/validator",
+    status_code=204,
+    response_class=Response,
+    summary="Clear JSON DB public write validator",
+)
+async def delete_collection_validator(
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> Response:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        row.write_validator_json = None
+        row.updated_at = _now()
+        sess.add(_operation(row.id, None, "validator", {"validator": None}))
+        await sess.commit()
+    return Response(status_code=204)
 
 
 @router.delete(
@@ -941,10 +1164,12 @@ async def delete_document(
 )
 async def public_list_documents(
     collection_id: int,
+    request: Request,
     user: OptionalCurrentUser,
     limit: int = Query(default=50, ge=1, le=MAX_DOCUMENT_LIST_LIMIT),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
@@ -979,14 +1204,17 @@ async def public_list_documents(
 async def public_create_document(
     collection_id: int,
     body: CreateDocIn,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
     doc_id = body.id or _new_doc_id()
     doc_id = _validate_doc_id(doc_id)
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
         _require_collection_access(coll, user=user, action="write")
+        _validate_public_write(coll, body.data)
         existing = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
         if existing is not None and existing.deleted_at is None:
             raise HTTPException(409, detail={"reason": "document_exists"})
@@ -1022,8 +1250,10 @@ async def public_create_document(
 async def public_query_documents(
     collection_id: int,
     body: QueryIn,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
@@ -1080,8 +1310,10 @@ async def public_query_documents(
 async def public_get_document(
     collection_id: int,
     doc_id: str,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
     doc_id = _validate_doc_id(doc_id)
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -1099,14 +1331,17 @@ async def public_set_document(
     collection_id: int,
     doc_id: str,
     body: SetDocIn,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
     doc_id = _validate_doc_id(doc_id)
     now = _now()
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
         _require_collection_access(coll, user=user, action="write")
+        _validate_public_write(coll, body.data)
         row = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
         if row is None:
             row = JsonDocument(
@@ -1140,8 +1375,10 @@ async def public_patch_document(
     collection_id: int,
     doc_id: str,
     body: PatchDocIn,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
     doc_id = _validate_doc_id(doc_id)
     now = _now()
     sm = get_sessionmaker()
@@ -1151,6 +1388,7 @@ async def public_patch_document(
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
         data = _json_loads(row.data_json)
         data.update(body.data)
+        _validate_public_write(coll, data)
         row.data_json = _json_dumps(data)
         row.version += 1
         row.updated_at = now
@@ -1170,8 +1408,10 @@ async def public_patch_document(
 async def public_delete_document(
     collection_id: int,
     doc_id: str,
+    request: Request,
     user: OptionalCurrentUser,
 ) -> Response:
+    _enforce_public_rate(request, action="write")
     doc_id = _validate_doc_id(doc_id)
     now = _now()
     sm = get_sessionmaker()
@@ -1188,4 +1428,4 @@ async def public_delete_document(
     return Response(status_code=204)
 
 
-__all__ = ["public_router", "router"]
+__all__ = ["public_router", "reset_json_db_public_rate_limits", "router"]

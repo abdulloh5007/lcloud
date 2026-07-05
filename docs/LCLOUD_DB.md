@@ -107,6 +107,9 @@ batch writes, upload size, auth, and rate limits.
 | Batch operations | `create`, `set`, `update`, `delete` |
 | Batch atomicity | all writes commit together or none commit |
 | Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
+| Public read rate limit | 120 requests/minute/IP |
+| Public write rate limit | 30 requests/minute/IP |
+| Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
 | File list page size | `limit` default 50, max 500 |
 | Upload size | deployment setting `LC_MAX_FILE_BYTES`; read `media.max_upload_bytes` from `_meta` |
 | API keys | max 25 active keys per user |
@@ -154,6 +157,20 @@ curl -X PUT "$BASE/collections/users/rules" \
   -d '{"read":"public","write":"owner"}'
 ```
 
+Public write validator:
+
+```bash
+curl -X PUT "$BASE/collections/users/validator" \
+  -H "Authorization: Bearer $LCLOUD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "max_bytes": 2048,
+    "max_fields": 4,
+    "required_fields": ["email"],
+    "allowed_fields": ["email", "message", "source", "created_at"]
+  }'
+```
+
 Rules:
 
 | Rule | Meaning |
@@ -172,8 +189,7 @@ curl "https://your-lcloud-host/api/v1/public/db/123/doc_id"
 ```
 
 Only set `write` to `public` for intentionally open forms or append-only public
-data. Public writes can be abused until per-rule validators/rate limits are
-added.
+data. Public writes are rate-limited per IP and should use a write validator.
 
 ### Documents
 
@@ -304,6 +320,11 @@ await db.ensureCollection("users");
 
 const users = db.collection<UserDoc>("users");
 const rules = await users.setRules({ read: "public", write: "owner" });
+await users.setValidator({
+  max_bytes: 2048,
+  required_fields: ["email"],
+  allowed_fields: ["email", "message"],
+});
 const publicUsers = db.publicCollection<UserDoc>(rules.collection_id);
 
 await users.insert(
@@ -475,8 +496,7 @@ together. Keep each batch at or below `meta.batch.max_writes`.
 - Query filtering is currently in the API process over materialized JSON rows.
 - No compound indexes exposed to users yet.
 - `PATCH` is shallow: it merges top-level fields only.
-- Access rules are collection-level only; document-level validators are not
-  implemented yet.
+- Access rules and write validators are collection-level only.
 - Telegram snapshot/segment flushing is planned but not active in the MVP.
 - SDK media uploads use the existing LCloud file API. Built-in client-side LC2
   signing helper is not bundled yet; advanced callers may pass LC2 fields

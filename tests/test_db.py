@@ -57,7 +57,7 @@ def test_migration_creates_all_tables(tmp_path: Path) -> None:
 
     missing = EXPECTED_TABLES - names
     assert not missing, f"missing tables: {missing}"
-    assert {"read_rule", "write_rule"} <= collection_columns
+    assert {"read_rule", "write_rule", "write_validator_json"} <= collection_columns
 
 
 def test_fts_trigger_indexes_inserted_files(tmp_path: Path) -> None:

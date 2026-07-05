@@ -25,6 +25,7 @@ def app_client(
     monkeypatch.setenv("LC_COOKIE_SECURE", "false")
 
     from lcloud.api import auth_v2 as auth_v2_mod
+    from lcloud.api import json_db as json_db_mod
     from lcloud.config import get_settings
     from lcloud.db import base as base_mod
     from lcloud.userbot.client import set_userbot_manager
@@ -34,6 +35,7 @@ def app_client(
     base_mod._sessionmaker = None
     set_userbot_manager(None)
     auth_v2_mod._v2_rate.reset()
+    json_db_mod.reset_json_db_public_rate_limits()
 
     from lcloud.main import create_app
 
@@ -47,6 +49,7 @@ def app_client(
         base_mod._sessionmaker = None
         set_userbot_manager(None)
         auth_v2_mod._v2_rate.reset()
+        json_db_mod.reset_json_db_public_rate_limits()
 
 
 def _login(client: TestClient) -> int:
@@ -148,6 +151,9 @@ def test_json_db_meta_exposes_machine_readable_limits(app_client: TestClient) ->
     assert body["media"]["max_upload_bytes"] >= 1
     assert body["auth"]["v2_login_rate_limit"]["window_seconds"] == 300
     assert body["access_rules"]["rules"] == ["owner", "authenticated", "public"]
+    assert body["access_rules"]["public_read_rate_limit"]["capacity"] == 120
+    assert body["access_rules"]["public_write_rate_limit"]["capacity"] == 30
+    assert "max_bytes" in body["access_rules"]["write_validator"]["fields"]
 
 
 def test_json_db_isolated_per_user(app_client: TestClient) -> None:
@@ -225,6 +231,99 @@ def test_json_db_public_access_rules(app_client: TestClient) -> None:
     )
     assert public_write.status_code == 201, public_write.text
     assert public_write.json()["data"]["title"] == "Browser"
+
+
+def test_json_db_public_write_validator(app_client: TestClient) -> None:
+    _login(app_client)
+    raw = app_client.post("/api/v1/keys", json={"label": "validator-test"}).json()["raw"]
+    created = app_client.post("/api/v1/db/collections", json={"name": "leads"})
+    assert created.status_code == 201, created.text
+    collection_id = created.json()["id"]
+
+    opened = app_client.put(
+        "/api/v1/db/collections/leads/rules",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"read": "owner", "write": "public"},
+    )
+    assert opened.status_code == 200, opened.text
+
+    validator = app_client.put(
+        "/api/v1/db/collections/leads/validator",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "max_bytes": 80,
+            "max_fields": 2,
+            "required_fields": ["email"],
+            "allowed_fields": ["email", "message"],
+        },
+    )
+    assert validator.status_code == 200, validator.text
+    assert validator.json()["validator"]["required_fields"] == ["email"]
+
+    app_client.cookies.clear()
+    missing = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "missing", "data": {"message": "hi"}},
+    )
+    assert missing.status_code == 422
+    assert missing.json()["detail"]["check"] == "required_fields"
+
+    extra = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "extra", "data": {"email": "a@b.co", "role": "admin"}},
+    )
+    assert extra.status_code == 422
+    assert extra.json()["detail"]["check"] == "allowed_fields"
+
+    too_large = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "large", "data": {"email": "a@b.co", "message": "x" * 200}},
+    )
+    assert too_large.status_code == 422
+    assert too_large.json()["detail"]["check"] == "max_bytes"
+
+    ok = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "ok", "data": {"email": "a@b.co", "message": "hi"}},
+    )
+    assert ok.status_code == 201, ok.text
+
+    bad_patch = app_client.patch(
+        f"/api/v1/public/db/{collection_id}/ok",
+        json={"data": {"role": "admin"}},
+    )
+    assert bad_patch.status_code == 422
+
+
+def test_json_db_public_write_rate_limit(app_client: TestClient) -> None:
+    _login(app_client)
+    raw = app_client.post("/api/v1/keys", json={"label": "rate-test"}).json()["raw"]
+    created = app_client.post("/api/v1/db/collections", json={"name": "open_forms"})
+    assert created.status_code == 201, created.text
+    collection_id = created.json()["id"]
+    assert (
+        app_client.put(
+            "/api/v1/db/collections/open_forms/rules",
+            headers={"Authorization": f"Bearer {raw}"},
+            json={"read": "owner", "write": "public"},
+        ).status_code
+        == 200
+    )
+
+    app_client.cookies.clear()
+    for index in range(30):
+        r = app_client.post(
+            f"/api/v1/public/db/{collection_id}",
+            json={"id": f"lead_{index}", "data": {"email": f"{index}@example.com"}},
+        )
+        assert r.status_code == 201, r.text
+
+    limited = app_client.post(
+        f"/api/v1/public/db/{collection_id}",
+        json={"id": "lead_limited", "data": {"email": "limited@example.com"}},
+    )
+    assert limited.status_code == 429
+    assert limited.json()["detail"]["scope"] == "public_write"
 
 
 def test_json_db_bearer_api_key_auth(app_client: TestClient) -> None:

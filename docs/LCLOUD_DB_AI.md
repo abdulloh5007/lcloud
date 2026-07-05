@@ -82,6 +82,9 @@ Current contract:
 | Query field path | max 128 chars; dot notation |
 | Batch writes | max 100 writes; atomic all-or-nothing |
 | Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
+| Public read rate limit | 120 requests/minute/IP |
+| Public write rate limit | 30 requests/minute/IP |
+| Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
 | API keys | max 25 active keys per user |
 | Upload size | read `meta.media.max_upload_bytes` |
 | V2 login rate limit | 10 challenge/verify requests per 5 minutes per IP |
@@ -147,6 +150,11 @@ const rules = await db.collection("posts").setRules({
   read: "public",
   write: "owner",
 });
+await db.collection("posts").setValidator({
+  max_bytes: 2048,
+  required_fields: ["email"],
+  allowed_fields: ["email", "message"],
+});
 
 const publicPosts = db.publicCollection(rules.collection_id);
 const page = await publicPosts.list({ limit: 20 });
@@ -161,7 +169,17 @@ Rules:
 | `public` | No credentials required |
 
 Do not set `write: "public"` unless the app intentionally accepts anonymous
-browser writes. Public writes need app-level validation and abuse protection.
+browser writes. Public writes are rate-limited per IP and should always use a
+write validator.
+
+Validator fields:
+
+| Field | Meaning |
+| --- | --- |
+| `max_bytes` | Max serialized JSON document size |
+| `max_fields` | Max number of top-level fields |
+| `required_fields` | Top-level fields that must exist |
+| `allowed_fields` | Reject top-level fields outside this list |
 
 ## CRUD snippets
 

@@ -32,6 +32,7 @@ export interface CollectionRow {
   owner_user_id: number;
   read_rule: AccessRule;
   write_rule: AccessRule;
+  write_validator: WriteValidator | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -120,6 +121,19 @@ export interface CollectionRules {
   public_base_path: string;
 }
 
+export interface WriteValidator {
+  max_bytes?: number | null;
+  max_fields?: number | null;
+  required_fields?: string[];
+  allowed_fields?: string[];
+}
+
+export interface CollectionValidator {
+  collection: string;
+  collection_id: number;
+  validator: WriteValidator | null;
+}
+
 export interface LCloudDbMeta {
   name: string;
   version: string;
@@ -162,6 +176,22 @@ export interface LCloudDbMeta {
     default_write: AccessRule;
     public_base_path: string;
     owner_manage_path: string;
+    write_validator_path: string;
+    public_read_rate_limit: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
+    public_write_rate_limit: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
+    write_validator: {
+      max_configurable_bytes: number;
+      fields: string[];
+      scope: string;
+    };
   };
   media: {
     max_upload_bytes: number;
@@ -299,6 +329,26 @@ export class LCloudDbClient {
     return this.request(`/api/v1/db/collections/${encodePath(name)}/rules`, {
       method: "PUT",
       body: JSON.stringify(rules),
+    });
+  }
+
+  async getCollectionValidator(name: string): Promise<CollectionValidator> {
+    return this.request(`/api/v1/db/collections/${encodePath(name)}/validator`);
+  }
+
+  async setCollectionValidator(
+    name: string,
+    validator: WriteValidator,
+  ): Promise<CollectionValidator> {
+    return this.request(`/api/v1/db/collections/${encodePath(name)}/validator`, {
+      method: "PUT",
+      body: JSON.stringify(validator),
+    });
+  }
+
+  async deleteCollectionValidator(name: string): Promise<void> {
+    await this.request<void>(`/api/v1/db/collections/${encodePath(name)}/validator`, {
+      method: "DELETE",
     });
   }
 
@@ -537,6 +587,18 @@ export class CollectionRef<T extends JsonObject = JsonObject> {
 
   async setRules(rules: { read: AccessRule; write: AccessRule }): Promise<CollectionRules> {
     return this.client.setCollectionRules(this.name, rules);
+  }
+
+  async getValidator(): Promise<CollectionValidator> {
+    return this.client.getCollectionValidator(this.name);
+  }
+
+  async setValidator(validator: WriteValidator): Promise<CollectionValidator> {
+    return this.client.setCollectionValidator(this.name, validator);
+  }
+
+  async deleteValidator(): Promise<void> {
+    await this.client.deleteCollectionValidator(this.name);
   }
 }
 

@@ -83,7 +83,13 @@ Access rules:
 const posts = db.collection("posts");
 
 await posts.setRules({ read: "public", write: "owner" });
+await posts.setValidator({
+  max_bytes: 2048,
+  required_fields: ["email"],
+  allowed_fields: ["email", "message"],
+});
 const rules = await posts.getRules();
+const validator = await posts.getValidator();
 
 const publicPosts = db.publicCollection(rules.collection_id);
 const page = await publicPosts.list({ limit: 20 });
@@ -99,6 +105,18 @@ Rules:
 | `public` | No credentials required |
 
 Default is `{ read: "owner", write: "owner" }`.
+
+Public write validators apply to `db.publicCollection(id).insert/set/update()`:
+
+| Validator field | Meaning |
+| --- | --- |
+| `max_bytes` | Max serialized JSON document size |
+| `max_fields` | Max number of top-level fields |
+| `required_fields` | Top-level fields that must exist |
+| `allowed_fields` | Reject top-level fields outside this list |
+
+Public routes are rate-limited per IP. Read limit and write limit are exposed
+by `await db.meta()`.
 
 ### Documents
 
