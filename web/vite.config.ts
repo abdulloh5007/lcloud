@@ -2,7 +2,7 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-const API_PREFIXES = ["/auth", "/clouds", "/files", "/tags", "/search", "/health"];
+const API_PREFIXES = ["/api", "/auth", "/clouds", "/files", "/tags", "/search", "/health"];
 
 const proxyTargets = Object.fromEntries(
   API_PREFIXES.map((p) => [

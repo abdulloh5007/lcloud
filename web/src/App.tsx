@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LoginScreen } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
 import { FilesPanel } from "./components/FilesPanel";
+import { DbDashboard } from "./components/DbDashboard";
 import { SettingsModal } from "./components/SettingsModal";
 import {
   useAuth,
@@ -51,6 +52,7 @@ export function App() {
   const [compressUploads, setCompressUploads] = useCompressUploads();
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"files" | "db">("files");
   const cloudsQ = useQuery({
     queryKey: ["clouds"],
     queryFn: () => clouds.list(),
@@ -58,6 +60,7 @@ export function App() {
   });
 
   function setSelectedCloud(id: number | null) {
+    setActiveView("files");
     setSelectedCloudState(id);
     setStoredSelectionKnown(true);
     writeStoredSelectedCloud(id);
@@ -157,11 +160,17 @@ export function App() {
         <Sidebar
           selectedCloudId={selectedCloud}
           onSelect={setSelectedCloud}
+          activeView={activeView}
+          onOpenDb={() => setActiveView("db")}
           mobileOpen={mobileSidebar}
           onMobileClose={() => setMobileSidebar(false)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <FilesPanel cloudId={selectedCloud} compressUploads={compressUploads} />
+        {activeView === "db" ? (
+          <DbDashboard />
+        ) : (
+          <FilesPanel cloudId={selectedCloud} compressUploads={compressUploads} />
+        )}
       </div>
       <SettingsModal
         open={settingsOpen}

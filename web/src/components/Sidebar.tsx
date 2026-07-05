@@ -7,6 +7,7 @@ import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
 import {
   Cloud as CloudIcon,
+  Database,
   Plus,
   Search,
   Settings,
@@ -18,6 +19,8 @@ import { classNames } from "@/lib/format";
 interface Props {
   selectedCloudId: number | null;
   onSelect: (id: number | null) => void;
+  activeView?: "files" | "db";
+  onOpenDb?: () => void;
   /** Mobile drawer open state — `undefined` means desktop (always open). */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -27,6 +30,8 @@ interface Props {
 export function Sidebar({
   selectedCloudId,
   onSelect,
+  activeView = "files",
+  onOpenDb,
   mobileOpen,
   onMobileClose,
   onOpenSettings,
@@ -115,7 +120,7 @@ export function Sidebar({
           }}
           className={classNames(
             "mx-2 rounded-lg px-3 py-2 text-sm text-left flex items-center gap-2",
-            selectedCloudId === null
+            activeView === "files" && selectedCloudId === null
               ? "bg-neutral-100 dark:bg-neutral-800 font-medium"
               : "hover:bg-neutral-50 dark:hover:bg-neutral-900",
           )}
@@ -123,6 +128,24 @@ export function Sidebar({
           <Search size={16} className="text-neutral-400 shrink-0" />
           Все файлы / поиск
         </button>
+        {onOpenDb && (
+          <button
+            type="button"
+            onClick={() => {
+              onOpenDb();
+              onMobileClose?.();
+            }}
+            className={classNames(
+              "mx-2 mt-1 rounded-lg px-3 py-2 text-sm text-left flex items-center gap-2",
+              activeView === "db"
+                ? "bg-neutral-100 dark:bg-neutral-800 font-medium"
+                : "hover:bg-neutral-50 dark:hover:bg-neutral-900",
+            )}
+          >
+            <Database size={16} className="text-neutral-400 shrink-0" />
+            DB console
+          </button>
+        )}
         <div className="px-4 pt-4 pb-1 flex items-center justify-between">
           <span className="text-xs uppercase tracking-wide text-neutral-500">
             Clouds
@@ -151,7 +174,7 @@ export function Sidebar({
               key={c.id}
               className={classNames(
                 "group rounded-lg flex items-center gap-2 px-2 py-2",
-                selectedCloudId === c.id
+                activeView === "files" && selectedCloudId === c.id
                   ? "bg-neutral-100 dark:bg-neutral-800"
                   : "hover:bg-neutral-50 dark:hover:bg-neutral-900",
               )}

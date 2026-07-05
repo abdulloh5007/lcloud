@@ -4,6 +4,13 @@ import type {
   CloudRow,
   FileRow,
   FilesPage,
+  JsonCollectionRow,
+  JsonDbMeta,
+  JsonDocumentsPage,
+  JsonQueryInput,
+  JsonRulesRow,
+  JsonValidatorRow,
+  JsonWriteValidator,
   SearchResult,
   TagRow,
   ThumbSize,
@@ -365,4 +372,100 @@ export const search = {
     const qs = sp.toString();
     return api<SearchResult>(`/search${qs ? `?${qs}` : ""}`);
   },
+};
+
+// ---------------------------------------------------------------- JSON DB
+
+function enc(v: string): string {
+  return encodeURIComponent(v);
+}
+
+export const jsonDb = {
+  meta: () => api<JsonDbMeta>("/api/v1/db/_meta"),
+  listCollections: () => api<JsonCollectionRow[]>("/api/v1/db/collections"),
+  createCollection: (name: string) =>
+    api<JsonCollectionRow>("/api/v1/db/collections", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  deleteCollection: (collection: string) =>
+    api<void>(`/api/v1/db/collections/${enc(collection)}`, {
+      method: "DELETE",
+    }),
+  listDocuments: (
+    collection: string,
+    params: { limit?: number; offset?: number } = {},
+  ) => {
+    const sp = new URLSearchParams();
+    if (params.limit !== undefined) sp.set("limit", String(params.limit));
+    if (params.offset !== undefined) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return api<JsonDocumentsPage>(
+      `/api/v1/db/${enc(collection)}${qs ? `?${qs}` : ""}`,
+    );
+  },
+  queryDocuments: (collection: string, input: JsonQueryInput) =>
+    api<JsonDocumentsPage>(`/api/v1/db/${enc(collection)}/query`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  createDocument: (
+    collection: string,
+    input: { id?: string; data: Record<string, unknown> },
+  ) =>
+    api<JsonDocumentsPage["items"][number]>(`/api/v1/db/${enc(collection)}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  setDocument: (
+    collection: string,
+    id: string,
+    data: Record<string, unknown>,
+  ) =>
+    api<JsonDocumentsPage["items"][number]>(
+      `/api/v1/db/${enc(collection)}/${enc(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ data }),
+      },
+    ),
+  patchDocument: (
+    collection: string,
+    id: string,
+    data: Record<string, unknown>,
+  ) =>
+    api<JsonDocumentsPage["items"][number]>(
+      `/api/v1/db/${enc(collection)}/${enc(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ data }),
+      },
+    ),
+  deleteDocument: (collection: string, id: string) =>
+    api<void>(`/api/v1/db/${enc(collection)}/${enc(id)}`, {
+      method: "DELETE",
+    }),
+  getRules: (collection: string) =>
+    api<JsonRulesRow>(`/api/v1/db/collections/${enc(collection)}/rules`),
+  setRules: (
+    collection: string,
+    rules: Pick<JsonRulesRow, "read" | "write">,
+  ) =>
+    api<JsonRulesRow>(`/api/v1/db/collections/${enc(collection)}/rules`, {
+      method: "PUT",
+      body: JSON.stringify(rules),
+    }),
+  getValidator: (collection: string) =>
+    api<JsonValidatorRow>(`/api/v1/db/collections/${enc(collection)}/validator`),
+  setValidator: (collection: string, validator: JsonWriteValidator) =>
+    api<JsonValidatorRow>(`/api/v1/db/collections/${enc(collection)}/validator`, {
+      method: "PUT",
+      body: JSON.stringify(validator),
+    }),
+  deleteValidator: (collection: string) =>
+    api<void>(`/api/v1/db/collections/${enc(collection)}/validator`, {
+      method: "DELETE",
+    }),
+  eventsUrl: (collection: string, since = 0) =>
+    `/api/v1/db/${enc(collection)}/events?since=${since}`,
 };

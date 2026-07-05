@@ -67,3 +67,148 @@ export interface SearchResult {
 export interface ApiErrorBody {
   detail?: { reason?: string; [k: string]: unknown } | string;
 }
+
+export type JsonAccessRule = "owner" | "authenticated" | "public";
+export type JsonWhereOp =
+  | "=="
+  | "!="
+  | "<"
+  | "<="
+  | ">"
+  | ">="
+  | "contains"
+  | "startsWith";
+
+export interface JsonWriteValidator {
+  max_bytes?: number | null;
+  max_fields?: number | null;
+  required_fields?: string[];
+  allowed_fields?: string[];
+}
+
+export interface JsonCollectionRow {
+  id: number;
+  name: string;
+  owner_user_id: number;
+  read_rule: JsonAccessRule;
+  write_rule: JsonAccessRule;
+  write_validator: JsonWriteValidator | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface JsonDocumentRow {
+  id: string;
+  collection_id: number;
+  data: Record<string, unknown>;
+  version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface JsonDocumentsPage {
+  items: JsonDocumentRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface JsonRulesRow {
+  collection: string;
+  collection_id: number;
+  read: JsonAccessRule;
+  write: JsonAccessRule;
+  public_base_path: string;
+}
+
+export interface JsonValidatorRow {
+  collection: string;
+  collection_id: number;
+  validator: JsonWriteValidator | null;
+}
+
+export interface JsonWhereFilter {
+  field: string;
+  op: JsonWhereOp;
+  value: unknown;
+}
+
+export interface JsonQueryInput {
+  where?: JsonWhereFilter[];
+  order_by?: string | null;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface JsonDbMeta {
+  name: string;
+  version: string;
+  documents: Record<string, unknown>;
+  collections: Record<string, unknown>;
+  document_ids: Record<string, unknown>;
+  pagination: {
+    default_limit: number;
+    max_limit: number;
+    offset_min: number;
+  };
+  query: {
+    max_where_filters: number;
+    max_field_path_length: number;
+    operators: JsonWhereOp[];
+    field_paths: string;
+    engine: string;
+    indexes: string;
+  };
+  batch: {
+    max_writes: number;
+    operations: string[];
+    atomic: boolean;
+  };
+  realtime: {
+    transport: string;
+    event: string;
+    owner_path: string;
+    public_path: string;
+    cursor: string;
+    query_params: string[];
+    poll_seconds: number;
+    batch_limit: number;
+  };
+  access_rules: {
+    rules: JsonAccessRule[];
+    default_read: JsonAccessRule;
+    default_write: JsonAccessRule;
+    public_base_path: string;
+    owner_manage_path: string;
+    write_validator_path: string;
+    public_read_rate_limit: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
+    public_write_rate_limit: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
+    write_validator: {
+      max_configurable_bytes: number;
+      fields: string[];
+      scope: string;
+    };
+  };
+  media: Record<string, unknown>;
+  auth: Record<string, unknown>;
+  rate_limits: Record<string, unknown>;
+  not_supported_yet: string[];
+}
+
+export interface JsonDbEvent {
+  id: number;
+  collection_id: number;
+  doc_id: string | null;
+  op: string;
+  payload: Record<string, unknown>;
+  created_at: string | null;
+}
