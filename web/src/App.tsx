@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { LoginScreen } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
 import { FilesPanel } from "./components/FilesPanel";
@@ -9,18 +10,76 @@ import {
   useTheme,
 } from "./hooks/useAuth";
 import { useAuthV2 } from "./hooks/useAuthV2";
-import { auth } from "./api/client";
+import { auth, clouds } from "./api/client";
 import { Button } from "./components/ui/Button";
 import { Moon, Sun, LogOut, Menu } from "lucide-react";
+
+const SELECTED_CLOUD_STORAGE_KEY = "lcloud:selected-cloud-id";
+
+function hasStoredCloudSelection(): boolean {
+  return window.localStorage.getItem(SELECTED_CLOUD_STORAGE_KEY) !== null;
+}
+
+function readStoredSelectedCloud(): number | null {
+  const raw = window.localStorage.getItem(SELECTED_CLOUD_STORAGE_KEY);
+  if (!raw || raw === "all") return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function writeStoredSelectedCloud(id: number | null) {
+  window.localStorage.setItem(
+    SELECTED_CLOUD_STORAGE_KEY,
+    id === null ? "all" : String(id),
+  );
+}
+
+function clearStoredSelectedCloud() {
+  window.localStorage.removeItem(SELECTED_CLOUD_STORAGE_KEY);
+}
 
 export function App() {
   const { data, isLoading, refresh } = useAuth();
   const v2 = useAuthV2(data?.userbot_authed === true);
-  const [selectedCloud, setSelectedCloud] = useState<number | null>(null);
+  const [storedSelectionKnown, setStoredSelectionKnown] = useState(
+    hasStoredCloudSelection,
+  );
+  const [selectedCloud, setSelectedCloudState] = useState<number | null>(
+    readStoredSelectedCloud,
+  );
   const [dark, setDark] = useTheme();
   const [compressUploads, setCompressUploads] = useCompressUploads();
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const cloudsQ = useQuery({
+    queryKey: ["clouds"],
+    queryFn: () => clouds.list(),
+    enabled: v2.isAuthenticated,
+  });
+
+  function setSelectedCloud(id: number | null) {
+    setSelectedCloudState(id);
+    setStoredSelectionKnown(true);
+    writeStoredSelectedCloud(id);
+  }
+
+  function clearSelectedCloud() {
+    setSelectedCloudState(null);
+    setStoredSelectionKnown(false);
+    clearStoredSelectedCloud();
+  }
+
+  useEffect(() => {
+    if (!v2.isAuthenticated || !cloudsQ.data) return;
+    if (selectedCloud !== null) {
+      const selectedStillExists = cloudsQ.data.some((c) => c.id === selectedCloud);
+      if (!selectedStillExists) setSelectedCloud(null);
+      return;
+    }
+    if (!storedSelectionKnown && cloudsQ.data.length > 0) {
+      setSelectedCloud(cloudsQ.data[0].id);
+    }
+  }, [cloudsQ.data, selectedCloud, storedSelectionKnown, v2.isAuthenticated]);
 
   if (isLoading || v2.isLoading) {
     return (
@@ -85,6 +144,7 @@ export function App() {
             onClick={async () => {
               await v2.logout();
               await auth.logout();
+              clearSelectedCloud();
               void refresh();
             }}
           >
@@ -113,6 +173,7 @@ export function App() {
           setSettingsOpen(false);
           await v2.logout();
           await auth.logout();
+          clearSelectedCloud();
           void refresh();
         }}
       />
