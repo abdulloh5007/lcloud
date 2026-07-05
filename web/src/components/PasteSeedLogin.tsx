@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { deriveKeypair, isValidSeedPhrase } from '@/auth/seed'
 import { loginWithKeypair } from '@/api/v2_client'
 import type { UserKeypair } from '@/hooks/useAuthV2'
+import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 
 interface Props {
   onSuccess: (kp: UserKeypair) => void
@@ -70,12 +71,16 @@ export function PasteSeedLogin({ onSuccess, onCreate, onForgot }: Props) {
           {trimmed ? `${trimmed.split(' ').length} слов` : 'Введите фразу…'}
         </span>
         {trimmed && !valid && (
-          <span className="text-amber-600 dark:text-amber-400">
-            ⚠️ Невалидная BIP39 фраза
+          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+            <AlertTriangle size={13} />
+            Невалидная BIP39 фраза
           </span>
         )}
         {valid && (
-          <span className="text-emerald-600 dark:text-emerald-400">✓ ОК</span>
+          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 size={13} />
+            ОК
+          </span>
         )}
       </div>
 

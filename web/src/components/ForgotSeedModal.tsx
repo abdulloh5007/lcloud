@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, pinApi } from "@/api/client";
+import { Check, Clipboard, KeyRound, UnlockKeyhole } from "lucide-react";
 
 interface Props {
   onClose: () => void;
@@ -79,7 +80,7 @@ export function ForgotSeedModal({ onClose }: Props) {
         {revealed ? (
           <div className="space-y-4">
             <div className="text-center">
-              <div className="text-3xl mb-2">🔓</div>
+              <UnlockKeyhole size={34} className="mx-auto mb-2 text-emerald-600" />
               <h2 className="text-xl font-bold">Ваша сид-фраза</h2>
               <p className="text-xs text-zinc-500 mt-2">
                 Сохраните прямо сейчас. Окно закроется автоматически через
@@ -101,9 +102,10 @@ export function ForgotSeedModal({ onClose }: Props) {
             </div>
             <button
               onClick={copy}
-              className="w-full py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg"
+              className="inline-flex w-full items-center justify-center gap-2 py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg"
             >
-              {copied ? "✓ Скопировано" : "📋 Копировать"}
+              {copied ? <Check size={15} /> : <Clipboard size={15} />}
+              {copied ? "Скопировано" : "Копировать"}
             </button>
             <button
               onClick={onClose}
@@ -115,7 +117,7 @@ export function ForgotSeedModal({ onClose }: Props) {
         ) : (
           <div className="space-y-4">
             <div className="text-center">
-              <div className="text-3xl mb-2">🔑</div>
+              <KeyRound size={34} className="mx-auto mb-2 text-blue-600" />
               <h2 className="text-xl font-bold">Восстановление</h2>
               <p className="text-sm text-zinc-500 mt-2">
                 Введите контакт, который вы указывали при покупке аккаунта,

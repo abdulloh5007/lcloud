@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { shares, type FileShare } from "@/api/client";
+import { Check, Clipboard } from "lucide-react";
 
 interface Props {
   fileId: number;
@@ -234,9 +235,11 @@ function ShareRow({
         {share.active && (
           <button
             onClick={onCopy}
-            className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded shrink-0"
+            className="inline-flex items-center justify-center px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded shrink-0"
+            aria-label="Копировать ссылку"
+            title="Копировать ссылку"
           >
-            {copied ? "✓" : "📋"}
+            {copied ? <Check size={13} /> : <Clipboard size={13} />}
           </button>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { versions, files as filesApi } from "@/api/client";
 import { formatBytes, formatDate } from "@/lib/format";
+import { Clock3, Download, Package } from "lucide-react";
 
 interface Props {
   fileId: number;
@@ -27,7 +28,8 @@ export function FileVersionsSection({ fileId }: Props) {
   return (
     <div className="border-t border-neutral-200 dark:border-neutral-800 px-3 sm:px-4 py-3 bg-panel dark:bg-panel-dark">
       <div className="text-xs text-neutral-500 mb-2">
-        🕒 Версии ({q.data.length})
+        <Clock3 size={13} className="inline mr-1 -mt-0.5" />
+        Версии ({q.data.length})
       </div>
       <div className="space-y-1.5">
         {q.data.map((v, i) => {
@@ -63,7 +65,11 @@ export function FileVersionsSection({ fileId }: Props) {
                 </div>
                 <div className="text-[11px] text-neutral-500 mt-0.5">
                   {formatBytes(v.size_bytes)}
-                  {v.compressed && " · 📦 сжата"}
+                  {v.compressed && (
+                    <span className="inline-flex items-center gap-1 ml-1">
+                      · <Package size={11} /> сжата
+                    </span>
+                  )}
                 </div>
               </div>
               {!isLive && (
@@ -72,7 +78,7 @@ export function FileVersionsSection({ fileId }: Props) {
                   className="text-blue-600 hover:text-blue-700 text-[11px] shrink-0"
                   title="Скачать эту версию"
                 >
-                  ⬇
+                  <Download size={14} />
                 </a>
               )}
             </div>

@@ -5,6 +5,7 @@ import { BootstrapAdminTGForm } from './BootstrapAdminTGForm'
 import { ForgotSeedModal } from './ForgotSeedModal'
 import type { LoginFlowState } from '@/api/types'
 import type { UserKeypair } from '@/hooks/useAuthV2'
+import { Cloud } from 'lucide-react'
 
 interface Props {
   userbotAuthed: boolean
@@ -31,7 +32,7 @@ export function LoginScreen({
       <div className="min-h-screen flex items-center justify-center bg-neutral-100 dark:bg-neutral-950 p-4">
         <div className="w-full max-w-md bg-white dark:bg-neutral-900 rounded-2xl shadow-xl p-6 sm:p-8">
           <div className="flex items-center gap-2 mb-6">
-            <span className="text-3xl">☁️</span>
+            <Cloud size={30} className="text-blue-600 dark:text-blue-400" />
             <h1 className="text-2xl font-bold">LCloud</h1>
           </div>
 

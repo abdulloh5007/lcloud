@@ -17,6 +17,7 @@ import {
   type ApiKey,
   type MintedApiKey,
 } from '@/api/v2_client'
+import { Check, Clipboard, Plus } from 'lucide-react'
 
 export function ApiKeysSection() {
   const qc = useQueryClient()
@@ -76,7 +77,10 @@ export function ApiKeysSection() {
       {justMinted && (
         <div className="rounded-lg border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 p-4 space-y-2">
           <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">
-            ✓ Ключ создан. Сохраните его сейчас — мы покажем его только один раз.
+            <span className="inline-flex items-center gap-1.5">
+              <Check size={15} />
+              Ключ создан. Сохраните его сейчас — мы покажем его только один раз.
+            </span>
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 px-3 py-2 bg-white dark:bg-neutral-900 border border-emerald-300 dark:border-emerald-800 rounded font-mono text-sm select-all">
@@ -85,8 +89,10 @@ export function ApiKeysSection() {
             <button
               onClick={() => void copy(justMinted.raw)}
               className="px-3 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded"
+              aria-label="Копировать ключ"
+              title="Копировать ключ"
             >
-              📋
+              <Clipboard size={15} />
             </button>
           </div>
           <button
@@ -101,9 +107,10 @@ export function ApiKeysSection() {
       {!creating && !justMinted && (
         <button
           onClick={() => setCreating(true)}
-          className="w-full py-2 border border-dashed border-neutral-300 dark:border-neutral-700 rounded-lg text-sm text-neutral-600 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+          className="inline-flex w-full items-center justify-center gap-2 py-2 border border-dashed border-neutral-300 dark:border-neutral-700 rounded-lg text-sm text-neutral-600 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-900"
         >
-          + Создать ключ
+          <Plus size={15} />
+          Создать ключ
         </button>
       )}
 

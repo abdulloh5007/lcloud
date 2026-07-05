@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, payments } from "@/api/client";
+import { Check, Clipboard, CreditCard, PartyPopper, Send } from "lucide-react";
 
 interface Props {
   onCancel?: () => void;
@@ -48,7 +49,7 @@ export function BuyAccountScreen({ onCancel }: Props) {
     return (
       <div className="space-y-5">
         <div className="rounded-lg border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 p-5 text-center">
-          <div className="text-3xl mb-2">🎉</div>
+          <PartyPopper size={34} className="mx-auto mb-2 text-emerald-600" />
           <h2 className="text-lg font-semibold text-emerald-900 dark:text-emerald-200">
             {submit.data.duplicate ? "Заявка уже в очереди" : "Заявка принята"}
           </h2>
@@ -93,7 +94,7 @@ export function BuyAccountScreen({ onCancel }: Props) {
                 {info.data.scheme.toUpperCase()}
               </div>
             </div>
-            <div className="text-2xl">💳</div>
+            <CreditCard size={28} className="opacity-90" />
           </div>
           <div className="font-mono text-lg tracking-[0.15em] mb-4 break-all">
             {info.data.card_number.match(/.{1,4}/g)?.join(" ")}
@@ -105,9 +106,10 @@ export function BuyAccountScreen({ onCancel }: Props) {
             </div>
             <button
               onClick={copyCard}
-              className="px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-md text-xs backdrop-blur transition"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-md text-xs backdrop-blur transition"
             >
-              {copied ? "✓ Скопировано" : "📋 Копировать №"}
+              {copied ? <Check size={13} /> : <Clipboard size={13} />}
+              {copied ? "Скопировано" : "Копировать №"}
             </button>
           </div>
         </div>
@@ -169,9 +171,10 @@ export function BuyAccountScreen({ onCancel }: Props) {
       <button
         onClick={() => submit.mutate()}
         disabled={!valid || submit.isPending}
-        className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition"
+        className="inline-flex w-full items-center justify-center gap-2 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition"
       >
-        {submit.isPending ? "Отправляем…" : "✅ Я оплатил, отправить заявку"}
+        {!submit.isPending && <Send size={16} />}
+        {submit.isPending ? "Отправляем…" : "Я оплатил, отправить заявку"}
       </button>
 
       {onCancel && (

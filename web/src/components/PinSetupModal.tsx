@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { pinApi } from "@/api/client";
+import { AlertTriangle } from "lucide-react";
 
 interface Props {
   /** Mnemonic to encrypt — must be the user's own (server validates). */
@@ -158,8 +159,13 @@ export function PinSetupModal({ mnemonic, onDone, modal = true }: Props) {
       </div>
 
       <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-        ⚠️ После 5 неверных попыток восстановления — аккаунт блокируется на 1
-        час. Запомните PIN.
+        <div className="flex gap-2">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <span>
+            После 5 неверных попыток восстановления — аккаунт блокируется на 1
+            час. Запомните PIN.
+          </span>
+        </div>
       </div>
 
       {setupM.isError && (

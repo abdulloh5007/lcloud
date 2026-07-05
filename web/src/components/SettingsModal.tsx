@@ -5,6 +5,15 @@ import { ApiKeysSection } from "./ApiKeysSection";
 import { AccountSection } from "./AccountSection";
 import { PaymentRequestsAdmin } from "./PaymentRequestsAdmin";
 import type { AuthMe } from "@/api/v2_client";
+import {
+  CreditCard,
+  Gem,
+  KeyRound,
+  Package,
+  Settings,
+  User,
+  type LucideIcon,
+} from "lucide-react";
 
 interface Props {
   open: boolean;
@@ -26,20 +35,22 @@ export function SettingsModal({
   onLogout,
 }: Props) {
   // Build tabs list dynamically — admin gets an extra "Заявки" tab.
-  const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
-    { key: "general", label: "Общие", icon: "⚙️" },
-    { key: "api_keys", label: "API-ключи", icon: "🔑" },
-    { key: "account", label: "Аккаунт", icon: "👤" },
+  const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
+    { key: "general", label: "Общие", icon: Settings },
+    { key: "api_keys", label: "API-ключи", icon: KeyRound },
+    { key: "account", label: "Аккаунт", icon: User },
   ];
   if (me?.role === "admin") {
-    tabs.push({ key: "payments", label: "Заявки", icon: "💳" });
+    tabs.push({ key: "payments", label: "Заявки", icon: CreditCard });
   }
 
   const [tab, setTab] = useState<TabKey>("general");
   return (
     <Modal open={open} onClose={onClose} title="Настройки" width="max-w-2xl">
       <div className="flex border-b border-neutral-200 dark:border-neutral-800 -mx-5 mb-4 px-3 overflow-x-auto">
-        {tabs.map((t) => (
+        {tabs.map((t) => {
+          const Icon = t.icon;
+          return (
           <button
             key={t.key}
             type="button"
@@ -51,10 +62,11 @@ export function SettingsModal({
                 : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
             )}
           >
-            <span className="mr-1">{t.icon}</span>
+            <Icon size={14} className="mr-1.5 inline -mt-0.5" />
             {t.label}
           </button>
-        ))}
+          );
+        })}
       </div>
       {tab === "general" && (
         <div className="space-y-5">
@@ -95,7 +107,10 @@ function CompressionSection({
           selected={value === true}
           onClick={() => onChange(true)}
         >
-          <div className="font-medium text-sm">📦 Сжимать (по умолчанию)</div>
+          <div className="flex items-center gap-2 font-medium text-sm">
+            <Package size={16} className="text-blue-600" />
+            Сжимать (по умолчанию)
+          </div>
           <div className="text-xs text-neutral-500 mt-1">
             Экономит место (~70% для фото). Минимальная потеря качества (JPEG q=85).
           </div>
@@ -104,7 +119,10 @@ function CompressionSection({
           selected={value === false}
           onClick={() => onChange(false)}
         >
-          <div className="font-medium text-sm">💎 Оригинал</div>
+          <div className="flex items-center gap-2 font-medium text-sm">
+            <Gem size={16} className="text-violet-600" />
+            Оригинал
+          </div>
           <div className="text-xs text-neutral-500 mt-1">
             Без сжатия. Файл сохраняется байт-в-байт. Больше места.
           </div>

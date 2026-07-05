@@ -16,11 +16,15 @@ import {
   Upload,
   Plus,
   X,
+  AlertCircle,
   FileIcon,
   Image,
   Film,
   Music,
   FileText,
+  Search,
+  Send,
+  ShieldCheck,
 } from "lucide-react";
 import { classNames, formatBytes, formatDate } from "@/lib/format";
 import { Button } from "./ui/Button";
@@ -329,7 +333,7 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
       <div className="border-b border-neutral-200 dark:border-neutral-800 px-3 sm:px-4 py-3 flex flex-wrap items-center gap-2 sm:gap-3">
         <input
           type="text"
-          placeholder="🔍 Поиск…"
+          placeholder="Поиск…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="flex-1 min-w-[10rem] max-w-md rounded-lg border border-neutral-200 dark:border-neutral-700 bg-panel dark:bg-panel-dark px-3 py-1.5 text-sm"
@@ -435,14 +439,16 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
                 <div className="flex justify-between">
                   <span className="truncate max-w-[60%]">
                     {p.phase === "signing" && !p.error && (
-                      <span className="mr-1.5 text-emerald-600 dark:text-emerald-400">
-                        🔐
-                      </span>
+                      <ShieldCheck
+                        size={13}
+                        className="mr-1.5 inline text-emerald-600 dark:text-emerald-400"
+                      />
                     )}
                     {p.phase === "uploading" && !p.error && (
-                      <span className="mr-1.5 text-blue-600 dark:text-blue-400">
-                        📤
-                      </span>
+                      <Send
+                        size={13}
+                        className="mr-1.5 inline text-blue-600 dark:text-blue-400"
+                      />
                     )}
                     {p.name}
                   </span>
@@ -453,7 +459,12 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
                     )}
                   >
                     {p.error
-                      ? `❌ ${p.error}`
+                      ? (
+                        <span className="inline-flex items-center gap-1">
+                          <AlertCircle size={13} />
+                          {p.error}
+                        </span>
+                      )
                       : p.phase === "signing"
                         ? "Подписываем…"
                         : `${formatBytes(p.loaded)} / ${formatBytes(p.total)}`}
@@ -514,7 +525,11 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
         )}
         {items.length === 0 && !list.isLoading && (
           <div className="flex flex-col items-center justify-center h-full text-sm text-neutral-400">
-            <Upload size={32} className="mb-3 opacity-40" />
+            {cloudId === null ? (
+              <Search size={32} className="mb-3 opacity-40" />
+            ) : (
+              <Upload size={32} className="mb-3 opacity-40" />
+            )}
             <p className="mb-1 text-center px-4">
               {cloudId === null
                 ? "Введите запрос или выберите cloud."
@@ -742,9 +757,10 @@ function FileGridCard({
           {file.caption_kind === "LC2" && (
             <span
               title="Подписан клиентом (LC2)"
-              className="text-xs px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400 font-mono shrink-0"
+              className="inline-flex items-center gap-1 text-xs px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400 font-mono shrink-0"
             >
-              🔐 LC2
+              <ShieldCheck size={11} />
+              LC2
             </span>
           )}
           {file.caption_kind === "LC1" && (

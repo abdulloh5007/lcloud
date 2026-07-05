@@ -5,7 +5,14 @@ import type { CloudRow } from "@/api/types";
 import { Button } from "./ui/Button";
 import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
-import { Cloud as CloudIcon, Plus, Settings, Trash2, X } from "lucide-react";
+import {
+  Cloud as CloudIcon,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react";
 import { classNames } from "@/lib/format";
 
 interface Props {
@@ -87,7 +94,7 @@ export function Sidebar({
         )}
       >
         <div className="px-4 pt-5 pb-3 flex items-center gap-2">
-          <span className="text-xl">☁️</span>
+          <CloudIcon size={22} className="text-blue-600 dark:text-blue-400" />
           <span className="font-semibold">LCloud</span>
           {onMobileClose && (
             <button
@@ -113,7 +120,7 @@ export function Sidebar({
               : "hover:bg-neutral-50 dark:hover:bg-neutral-900",
           )}
         >
-          <span>🔍</span>
+          <Search size={16} className="text-neutral-400 shrink-0" />
           Все файлы / поиск
         </button>
         <div className="px-4 pt-4 pb-1 flex items-center justify-between">

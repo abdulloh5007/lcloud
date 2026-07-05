@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, files as filesApi } from "@/api/client";
 import type { FileRow } from "@/api/types";
-import { Download, X, Pencil, Check, Share2 } from "lucide-react";
+import { Download, X, Pencil, Check, Share2, FileIcon } from "lucide-react";
 import { Button } from "./ui/Button";
 import { TextField } from "./ui/TextField";
 import { Modal } from "./ui/Modal";
@@ -321,7 +321,7 @@ function PreviewBody({
     default:
       return (
         <div className="flex flex-col items-center text-center text-sm text-neutral-500 py-12">
-          <div className="text-4xl mb-3">📄</div>
+          <FileIcon size={44} className="mb-3 text-neutral-400" />
           <div className="font-medium text-neutral-700 dark:text-neutral-200">
             Превью не поддерживается для {mime || "этого типа"}
           </div>

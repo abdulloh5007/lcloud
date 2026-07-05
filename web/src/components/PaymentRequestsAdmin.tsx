@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { payments, type PaymentRequestRow } from "@/api/client";
+import { AlertTriangle, Check, Clipboard, ShieldCheck, X } from "lucide-react";
 
 /**
  * Admin page: review and approve payment requests.
@@ -174,16 +175,18 @@ function RequestRow({
             <button
               onClick={onApprove}
               disabled={busy}
-              className="px-3 py-1 text-xs bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded"
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded"
             >
-              ✓ Одобрить
+              <Check size={13} />
+              Одобрить
             </button>
             <button
               onClick={onReject}
               disabled={busy}
-              className="px-3 py-1 text-xs bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white rounded"
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white rounded"
             >
-              ✕ Отклонить
+              <X size={13} />
+              Отклонить
             </button>
           </div>
         )}
@@ -213,7 +216,10 @@ function ApprovedSeedModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="bg-white dark:bg-neutral-900 rounded-2xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4">
         <div>
-          <h3 className="text-lg font-bold">🔐 Заявка #{info.request_id} одобрена</h3>
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <ShieldCheck size={20} className="text-emerald-600" />
+            Заявка #{info.request_id} одобрена
+          </h3>
           <p className="text-sm text-neutral-500 mt-1">
             Перешлите эту сид-фразу пользователю <strong>{info.contact}</strong>:
           </p>
@@ -221,7 +227,10 @@ function ApprovedSeedModal({
 
         <div className="rounded-lg border-2 border-amber-500 bg-amber-50 dark:bg-amber-950/30 p-4">
           <div className="text-xs font-semibold text-amber-900 dark:text-amber-200 mb-2">
-            ⚠️ Эта фраза показывается ОДИН раз. Сервер её больше не сохранит.
+            <span className="inline-flex items-center gap-1.5">
+              <AlertTriangle size={14} />
+              Эта фраза показывается ОДИН раз. Сервер её больше не сохранит.
+            </span>
           </div>
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 mt-3 font-mono text-xs">
             {info.seed.split(" ").map((w, i) => (
@@ -240,9 +249,10 @@ function ApprovedSeedModal({
 
         <button
           onClick={copy}
-          className="w-full py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg"
+          className="inline-flex w-full items-center justify-center gap-2 py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg"
         >
-          {copied ? "✓ Скопировано" : "📋 Скопировать всю фразу"}
+          {copied ? <Check size={15} /> : <Clipboard size={15} />}
+          {copied ? "Скопировано" : "Скопировать всю фразу"}
         </button>
 
         <label className="flex items-center gap-2 p-3 rounded-lg border border-neutral-300 dark:border-neutral-700 cursor-pointer">
