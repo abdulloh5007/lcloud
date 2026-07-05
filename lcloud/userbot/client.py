@@ -105,6 +105,10 @@ class UserbotManager:
         """Force Telethon's SQLite session to disk after successful auth."""
         if self._client is None:
             return
+        for path in session_files(self._settings):
+            if path.exists():
+                with contextlib.suppress(OSError):
+                    path.chmod(0o600)
         with contextlib.suppress(Exception):
             self._client.session.save()
         for path in session_files(self._settings):
@@ -132,6 +136,7 @@ class UserbotManager:
         async with self._lock:
             if self._client is None:
                 return
+            self._persist_session()
             with contextlib.suppress(Exception):
                 await self._client.disconnect()
             self._client = None
