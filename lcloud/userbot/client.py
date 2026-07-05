@@ -26,7 +26,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
 from lcloud.config import Settings, get_settings
-from lcloud.userbot.session import archive_rejected_session
+from lcloud.userbot.session import archive_rejected_session, session_files
 
 if TYPE_CHECKING:
     from telethon.tl.custom import Message  # noqa: F401
@@ -100,6 +100,17 @@ class UserbotManager:
             self._settings.tg_api_id,
             self._settings.tg_api_hash,
         )
+
+    def _persist_session(self) -> None:
+        """Force Telethon's SQLite session to disk after successful auth."""
+        if self._client is None:
+            return
+        with contextlib.suppress(Exception):
+            self._client.session.save()
+        for path in session_files(self._settings):
+            if path.exists():
+                with contextlib.suppress(OSError):
+                    path.chmod(0o600)
 
     async def start(self) -> None:
         """Connect Telethon. Skips if API creds are unset (degraded mode)."""
@@ -243,6 +254,7 @@ class UserbotManager:
             await self._reject_session(got_user_id=got_id)
             raise WrongAccountError(got=got_id, expected=expected)
 
+        self._persist_session()
         self._flow = None
         return AuthSnapshot(
             authorized=True,
