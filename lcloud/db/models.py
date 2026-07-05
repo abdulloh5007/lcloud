@@ -329,6 +329,30 @@ class JsonCollection(Base):
     )
 
 
+class JsonDbPublicKey(Base):
+    """Publishable DB key for browser/serverless apps.
+
+    This key is intentionally not a secret. It identifies a user's public DB
+    namespace; access is still enforced by collection read/write rules.
+    """
+
+    __tablename__ = "json_db_public_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    label: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class JsonDocument(Base):
     """Current materialized state of one JSON document."""
 

@@ -6,6 +6,7 @@ import type {
   FilesPage,
   JsonCollectionRow,
   JsonDbMeta,
+  JsonDbPublicKeyRow,
   JsonDocumentsPage,
   JsonQueryInput,
   JsonRulesRow,
@@ -387,6 +388,16 @@ export const jsonDb = {
     api<JsonCollectionRow>("/api/v1/db/collections", {
       method: "POST",
       body: JSON.stringify({ name }),
+    }),
+  listPublicKeys: () => api<JsonDbPublicKeyRow[]>("/api/v1/db/public-keys"),
+  createPublicKey: (label: string) =>
+    api<JsonDbPublicKeyRow>("/api/v1/db/public-keys", {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    }),
+  revokePublicKey: (id: number) =>
+    api<{ ok: boolean }>(`/api/v1/db/public-keys/${id}`, {
+      method: "DELETE",
     }),
   deleteCollection: (collection: string) =>
     api<void>(`/api/v1/db/collections/${enc(collection)}`, {

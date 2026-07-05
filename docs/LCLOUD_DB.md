@@ -45,11 +45,78 @@ Use one of:
 | --- | --- |
 | `lc_user_session` cookie | Browser UI already logged into LCloud |
 | `Authorization: Bearer lc-...` | Server-side apps, scripts, CLIs, AI agents, external sites |
+| Publishable DB key `lcpk_...` | Static browser sites with collection rules set to `public` |
+| Public collection ID | Lower-level anonymous access by numeric collection ID |
 
 Create API keys in the web UI: Settings -> API keys -> Create key.
 
 Never expose an API key in frontend code shipped to users. Browser-only apps
-should use the LCloud web session or a backend proxy.
+should use public collection endpoints, the LCloud web session, or a backend
+proxy.
+
+### Browser-only / serverless mode
+
+This is the Supabase/Firebase-style mode for a plain static website:
+
+1. In DB Console or a trusted admin script, create a collection.
+2. In DB Console -> Keys, create a publishable DB key (`lcpk_...`).
+3. Set access rules:
+   - public read site: `{ "read": "public", "write": "owner" }`
+   - public form: `{ "read": "owner", "write": "public" }`
+4. For public writes, set a validator with `max_bytes`, `max_fields`,
+   `required_fields`, and `allowed_fields`.
+5. In frontend code use `createBrowserClient()` with `publishableKey`.
+
+Frontend `.env` values are not secret. Vite/Next/browser builds expose them in
+JavaScript. Do not use `LCLOUD_API_KEY` in frontend `.env`. LCloud API keys are
+owner secrets, not public anon keys.
+
+Server CORS must allow the static site origin:
+
+```env
+LC_CORS_ALLOW_ORIGINS=https://my-site.com,https://www.my-site.com
+```
+
+Use `*` only for public endpoints/collections. Do not combine wildcard CORS
+with cookie or API-key browser flows.
+
+Browser-only example:
+
+```ts
+import { createBrowserClient } from "@lcloud/db";
+
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+});
+
+const posts = lcloud.collection<Post>("posts");
+const page = await posts.list({ limit: 20 });
+
+const contact = lcloud.collection<ContactMessage>("contact_forms");
+await contact.insert({
+  email,
+  message,
+  source: "landing-page",
+});
+```
+
+Do not add a local JSON database fallback for production. If LCloud is
+configured, it is the source of truth. Local JSON files are acceptable only for
+explicit offline mocks/tests.
+
+Publishable key route shape:
+
+```text
+GET    /api/v1/public/db/key/{publishable_key}/{collection}
+POST   /api/v1/public/db/key/{publishable_key}/{collection}
+POST   /api/v1/public/db/key/{publishable_key}/{collection}/query
+GET    /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
+PUT    /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
+PATCH  /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
+DELETE /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
+GET    /api/v1/public/db/key/{publishable_key}/{collection}/events
+```
 
 ## Naming rules
 

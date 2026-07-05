@@ -50,6 +50,91 @@ await users.update("alice", {
 });
 ```
 
+## Two modes: server/admin and browser-only
+
+LCloud works like Supabase/Firebase in this important way:
+
+- trusted setup code uses a secret API key to create collections, rules, and
+  publishable DB keys;
+- public frontend code uses a publishable DB key plus collection rules, not a
+  secret key.
+
+Do **not** put `LCLOUD_API_KEY` in a frontend `.env` file. Frontend env vars are
+compiled into the browser bundle by tools like Vite and Next.js. LCloud API keys
+are owner secrets, unlike a Supabase anon key.
+
+### Server/admin setup
+
+Run this from a server, CLI, CI job, or local admin script:
+
+```ts
+import { createClient } from "@lcloud/db";
+
+const admin = createClient({
+  endpoint: process.env.LCLOUD_ENDPOINT!,
+  apiKey: process.env.LCLOUD_API_KEY!,
+});
+
+await admin.ensureCollection("posts");
+const publicKey = await admin.createPublicKey("website");
+const rules = await admin.collection("posts").setRules({
+  read: "public",
+  write: "owner",
+});
+
+console.log("Publishable key:", publicKey.key);
+console.log("Public collection id:", rules.collection_id);
+```
+
+For anonymous browser writes, open writes deliberately and add a validator:
+
+```ts
+await admin.collection("contact_forms").setRules({
+  read: "owner",
+  write: "public",
+});
+await admin.collection("contact_forms").setValidator({
+  max_bytes: 2048,
+  max_fields: 3,
+  required_fields: ["email", "message"],
+  allowed_fields: ["email", "message", "source"],
+});
+```
+
+### Browser-only / static website
+
+Use this in a plain HTML/Vite/Next/static frontend with no backend:
+
+```ts
+import { createBrowserClient } from "@lcloud/db";
+
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+});
+
+const posts = lcloud.collection("posts");
+const page = await posts.list({ limit: 20 });
+
+await lcloud.collection("contact_forms").insert({
+  email,
+  message,
+  source: "landing-page",
+});
+```
+
+The LCloud server must allow your site origin with `LC_CORS_ALLOW_ORIGINS`, for
+example:
+
+```env
+LC_CORS_ALLOW_ORIGINS=https://my-site.com,https://www.my-site.com
+```
+
+For public read-only content set `{ read: "public", write: "owner" }`.
+For public forms set `{ read: "owner", write: "public" }` plus a validator.
+Do not create a local JSON fallback unless the user explicitly asks for offline
+mock data; the remote LCloud public collection is the source of truth.
+
 ## API
 
 ### `createClient(options)`
@@ -66,6 +151,24 @@ Options:
 - `endpoint`: LCloud server origin, without `/api/v1/db`.
 - `apiKey`: optional Bearer API key. If omitted, browser cookies are used.
 - `fetch`: optional custom fetch implementation.
+- `credentials`: optional fetch credentials mode. Defaults to `"include"`.
+
+### `createBrowserClient(options)`
+
+```ts
+const lcloud = createBrowserClient({
+  endpoint: "https://your-lcloud-host",
+  publishableKey: "lcpk_...",
+});
+```
+
+Use this for static frontend/serverless apps. It sends no cookies and no API
+key, so it only works with collections whose rules allow public read/write.
+
+### `createPublicClient(options)`
+
+Lower-level public client. Use it with `publicCollection(collectionId)` when
+you already know the numeric collection ID.
 
 ### Collections
 
@@ -300,4 +403,5 @@ try {
 
 Do not put API keys into public frontend bundles. Use API keys from server-side
 code, CLIs, workers, or trusted automation. Browser apps should use an existing
-LCloud web session or call your own backend.
+LCloud web session, a public collection via `createPublicClient()`, or your own
+backend.

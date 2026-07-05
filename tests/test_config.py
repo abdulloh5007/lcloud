@@ -7,6 +7,7 @@ def test_settings_defaults() -> None:
     s = Settings(_env_file=None)
     assert s.lc_host == "127.0.0.1"
     assert s.lc_port == 8787
+    assert s.cors_allow_origins == []
     assert s.lc_max_workers == 10
     assert s.lc_max_file_bytes == 1024 * 1024 * 1024
     assert s.lc_session_ttl_seconds == 7 * 24 * 3600
@@ -18,3 +19,11 @@ def test_settings_paths(tmp_path) -> None:
     assert (tmp_path / "d").is_dir()
     assert (tmp_path / "d" / "keys").is_dir()
     assert (tmp_path / "d" / "tmp").is_dir()
+
+
+def test_settings_cors_origins_are_comma_separated() -> None:
+    s = Settings(
+        _env_file=None,
+        lc_cors_allow_origins="https://a.example, https://b.example ,,",
+    )
+    assert s.cors_allow_origins == ["https://a.example", "https://b.example"]

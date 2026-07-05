@@ -26,7 +26,12 @@ from lcloud import __version__
 from lcloud.auth.v2_deps import CurrentUser, OptionalCurrentUser
 from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
-from lcloud.db.models import JsonCollection, JsonDocument, JsonOperation
+from lcloud.db.models import (
+    JsonCollection,
+    JsonDbPublicKey,
+    JsonDocument,
+    JsonOperation,
+)
 from lcloud.utils.rate_limit import RateLimiter
 
 router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
@@ -40,6 +45,7 @@ MAX_BATCH_WRITES = 100
 MAX_QUERY_FIELD_PATH_LENGTH = 128
 DEFAULT_PAGE_LIMIT = 50
 MAX_API_KEYS_PER_USER = 25
+MAX_DB_PUBLIC_KEYS_PER_USER = 25
 MAX_VALIDATOR_BYTES = 1024 * 1024
 PUBLIC_READ_RATE_LIMIT = 120
 PUBLIC_WRITE_RATE_LIMIT = 30
@@ -52,6 +58,10 @@ DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 RESERVED_COLLECTIONS = {"collections"}
 AccessRule = Literal["owner", "authenticated", "public"]
 ACCESS_RULES = ("owner", "authenticated", "public")
+DB_PUBLIC_KEY_PREFIX = "lcpk_"
+DB_PUBLIC_KEY_PREFIX_LEN = len(DB_PUBLIC_KEY_PREFIX) + 8
+DB_PUBLIC_KEY_ENTROPY_LEN = 32
+DB_PUBLIC_KEY_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
 _public_read_rate = RateLimiter(
     capacity=PUBLIC_READ_RATE_LIMIT, refill_seconds=PUBLIC_RATE_WINDOW_SECONDS
 )
@@ -70,6 +80,10 @@ class CollectionIn(BaseModel):
         if name in RESERVED_COLLECTIONS or not NAME_RE.match(name):
             raise ValueError("invalid_collection_name")
         return name
+
+
+class PublicKeyIn(BaseModel):
+    label: str = Field(default="", max_length=64)
 
 
 class CollectionRulesIn(BaseModel):
@@ -198,6 +212,14 @@ def _new_doc_id() -> str:
     return f"doc_{secrets.token_urlsafe(12).replace('-', '').replace('_', '')[:16]}"
 
 
+def _new_db_public_key() -> str:
+    body = "".join(
+        secrets.choice(DB_PUBLIC_KEY_ALPHABET)
+        for _ in range(DB_PUBLIC_KEY_ENTROPY_LEN)
+    )
+    return f"{DB_PUBLIC_KEY_PREFIX}{body}"
+
+
 def _validate_collection_name(collection: str) -> str:
     if collection in RESERVED_COLLECTIONS or not NAME_RE.match(collection):
         raise HTTPException(422, detail={"reason": "invalid_collection_name"})
@@ -220,6 +242,17 @@ def _serialize_collection(row: JsonCollection) -> dict[str, Any]:
         "write_validator": _load_write_validator(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_public_key(row: JsonDbPublicKey) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "key": row.key,
+        "prefix": row.prefix,
+        "label": row.label,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
     }
 
 
@@ -421,6 +454,36 @@ async def _get_collection_by_id_or_404(
     return collection
 
 
+async def _get_collection_by_public_key_or_404(
+    sess: AsyncSession,
+    *,
+    key: str,
+    name: str,
+) -> JsonCollection:
+    public_key = (
+        await sess.execute(
+            sa.select(JsonDbPublicKey).where(
+                JsonDbPublicKey.key == key,
+                JsonDbPublicKey.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if public_key is None:
+        raise HTTPException(404, detail={"reason": "public_key_not_found"})
+
+    collection = (
+        await sess.execute(
+            sa.select(JsonCollection).where(
+                JsonCollection.owner_user_id == public_key.owner_user_id,
+                JsonCollection.name == name,
+            )
+        )
+    ).scalar_one_or_none()
+    if collection is None:
+        raise HTTPException(404, detail={"reason": "collection_not_found"})
+    return collection
+
+
 def _can_access_collection(
     coll: JsonCollection,
     *,
@@ -553,6 +616,335 @@ def _event_stream_response(stream: AsyncIterator[str]) -> StreamingResponse:
     )
 
 
+@public_router.get(
+    "/key/{publishable_key}/{collection}",
+    summary="Publishable-key list JSON documents by collection name",
+)
+async def public_key_list_documents(
+    publishable_key: str,
+    collection: str,
+    request: Request,
+    user: OptionalCurrentUser,
+    limit: int = Query(default=50, ge=1, le=MAX_DOCUMENT_LIST_LIMIT),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="read")
+        base = sa.select(JsonDocument).where(
+            JsonDocument.collection_id == coll.id,
+            JsonDocument.deleted_at.is_(None),
+        )
+        total = (
+            await sess.execute(sa.select(sa.func.count()).select_from(base.subquery()))
+        ).scalar_one()
+        rows = (
+            await sess.execute(
+                base.order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars().all()
+    return {
+        "items": [_serialize_document(row) for row in rows],
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@public_router.post(
+    "/key/{publishable_key}/{collection}",
+    status_code=201,
+    summary="Publishable-key create JSON document by collection name",
+)
+async def public_key_create_document(
+    publishable_key: str,
+    collection: str,
+    body: CreateDocIn,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(body.id or _new_doc_id())
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="write")
+        _validate_public_write(coll, body.data)
+        existing = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+        if existing is not None and existing.deleted_at is None:
+            raise HTTPException(409, detail={"reason": "document_exists"})
+
+        now = _now()
+        if existing is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+            )
+            sess.add(row)
+        else:
+            row = existing
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
+        coll.updated_at = now
+        await sess.flush()
+        sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.post(
+    "/key/{publishable_key}/{collection}/query",
+    summary="Publishable-key query JSON documents by collection name",
+)
+async def public_key_query_documents(
+    publishable_key: str,
+    collection: str,
+    body: QueryIn,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="read")
+        rows = (
+            await sess.execute(
+                sa.select(JsonDocument)
+                .where(
+                    JsonDocument.collection_id == coll.id,
+                    JsonDocument.deleted_at.is_(None),
+                )
+                .order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+            )
+        ).scalars().all()
+
+    matched: list[tuple[JsonDocument, dict[str, Any]]] = []
+    for row in rows:
+        data = _json_loads(row.data_json)
+        if all(_compare(_get_field(data, w.field), w.op, w.value) for w in body.where):
+            matched.append((row, data))
+
+    if body.order_by is not None:
+        matched.sort(
+            key=lambda item: (
+                _get_field(item[1], body.order_by or "") is None,
+                _get_field(item[1], body.order_by or ""),
+            ),
+            reverse=body.order == "desc",
+        )
+
+    page = matched[body.offset : body.offset + body.limit]
+    return {
+        "items": [
+            {
+                "id": row.doc_id,
+                "collection_id": row.collection_id,
+                "data": data,
+                "version": row.version,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row, data in page
+        ],
+        "total": len(matched),
+        "limit": body.limit,
+        "offset": body.offset,
+    }
+
+
+@public_router.get(
+    "/key/{publishable_key}/{collection}/events",
+    summary="Publishable-key stream JSON DB changes by collection name",
+)
+async def public_key_stream_collection_events(
+    publishable_key: str,
+    collection: str,
+    request: Request,
+    user: OptionalCurrentUser,
+    since: int = Query(default=0, ge=0),
+    once: bool = Query(default=False),
+) -> StreamingResponse:
+    _enforce_public_rate(request, action="read")
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="read")
+        collection_id = coll.id
+    return _event_stream_response(
+        _stream_collection_events(
+            collection_id=collection_id,
+            request=request,
+            user=user,
+            since=since,
+            once=once,
+        )
+    )
+
+
+@public_router.get(
+    "/key/{publishable_key}/{collection}/{doc_id}",
+    summary="Publishable-key get JSON document by collection name",
+)
+async def public_key_get_document(
+    publishable_key: str,
+    collection: str,
+    doc_id: str,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="read")
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="read")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+    return _serialize_document(row)
+
+
+@public_router.put(
+    "/key/{publishable_key}/{collection}/{doc_id}",
+    summary="Publishable-key replace JSON document by collection name",
+)
+async def public_key_set_document(
+    publishable_key: str,
+    collection: str,
+    doc_id: str,
+    body: SetDocIn,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="write")
+        _validate_public_write(coll, body.data)
+        row = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+        if row is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+                deleted_at=None,
+            )
+            sess.add(row)
+            op = "create"
+        else:
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
+            op = "set"
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.patch(
+    "/key/{publishable_key}/{collection}/{doc_id}",
+    summary="Publishable-key patch JSON document by collection name",
+)
+async def public_key_patch_document(
+    publishable_key: str,
+    collection: str,
+    doc_id: str,
+    body: PatchDocIn,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> dict[str, Any]:
+    _enforce_public_rate(request, action="write")
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="write")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        data = _json_loads(row.data_json)
+        data.update(body.data)
+        _validate_public_write(coll, data)
+        row.data_json = _json_dumps(data)
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_document(row)
+
+
+@public_router.delete(
+    "/key/{publishable_key}/{collection}/{doc_id}",
+    status_code=204,
+    response_class=Response,
+    summary="Publishable-key delete JSON document by collection name",
+)
+async def public_key_delete_document(
+    publishable_key: str,
+    collection: str,
+    doc_id: str,
+    request: Request,
+    user: OptionalCurrentUser,
+) -> Response:
+    _enforce_public_rate(request, action="write")
+    name = _validate_collection_name(collection)
+    doc_id = _validate_doc_id(doc_id)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_public_key_or_404(
+            sess, key=publishable_key, name=name
+        )
+        _require_collection_access(coll, user=user, action="write")
+        row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        row.deleted_at = now
+        row.version += 1
+        row.updated_at = now
+        coll.updated_at = now
+        sess.add(_operation(coll.id, doc_id, "delete", {}))
+        await sess.commit()
+    return Response(status_code=204)
+
+
 @router.get(
     "/_meta",
     summary="LCloud DB capabilities and limits",
@@ -614,8 +1006,14 @@ async def db_meta() -> dict[str, Any]:
             "default_read": "owner",
             "default_write": "owner",
             "public_base_path": "/api/v1/public/db/{collection_id}",
+            "publishable_key_path": (
+                "/api/v1/public/db/key/{publishable_key}/{collection}"
+            ),
             "owner_manage_path": "/api/v1/db/collections/{collection}/rules",
             "write_validator_path": "/api/v1/db/collections/{collection}/validator",
+            "publishable_key_manage_path": "/api/v1/db/public-keys",
+            "publishable_key_prefix": DB_PUBLIC_KEY_PREFIX,
+            "max_publishable_keys_per_user": MAX_DB_PUBLIC_KEYS_PER_USER,
             "public_read_rate_limit": {
                 "capacity": PUBLIC_READ_RATE_LIMIT,
                 "window_seconds": PUBLIC_RATE_WINDOW_SECONDS,
@@ -725,6 +1123,97 @@ async def create_collection(body: CollectionIn, user: CurrentUser) -> dict[str, 
         await sess.commit()
         await sess.refresh(row)
         return _serialize_collection(row)
+
+
+@router.get(
+    "/public-keys",
+    summary="List publishable DB keys",
+    description=(
+        "Publishable DB keys are safe to embed in frontend apps. They identify "
+        "the user's public DB namespace; collection rules still control access."
+    ),
+)
+async def list_public_keys(user: CurrentUser) -> list[dict[str, Any]]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        rows = (
+            await sess.execute(
+                sa.select(JsonDbPublicKey)
+                .where(JsonDbPublicKey.owner_user_id == user.id)
+                .order_by(JsonDbPublicKey.created_at.desc(), JsonDbPublicKey.id.desc())
+            )
+        ).scalars().all()
+        return [_serialize_public_key(row) for row in rows]
+
+
+@router.post(
+    "/public-keys",
+    status_code=201,
+    summary="Create publishable DB key",
+)
+async def create_public_key(body: PublicKeyIn, user: CurrentUser) -> dict[str, Any]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        active = (
+            await sess.execute(
+                sa.select(sa.func.count())
+                .select_from(JsonDbPublicKey)
+                .where(
+                    JsonDbPublicKey.owner_user_id == user.id,
+                    JsonDbPublicKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        if active >= MAX_DB_PUBLIC_KEYS_PER_USER:
+            raise HTTPException(
+                400,
+                detail={
+                    "reason": "public_key_limit_reached",
+                    "max": MAX_DB_PUBLIC_KEYS_PER_USER,
+                },
+            )
+
+        key = _new_db_public_key()
+        while (
+            await sess.execute(
+                sa.select(JsonDbPublicKey.id).where(JsonDbPublicKey.key == key)
+            )
+        ).scalar_one_or_none():
+            key = _new_db_public_key()
+
+        row = JsonDbPublicKey(
+            owner_user_id=user.id,
+            key=key,
+            prefix=key[:DB_PUBLIC_KEY_PREFIX_LEN],
+            label=body.label.strip(),
+        )
+        sess.add(row)
+        await sess.commit()
+        await sess.refresh(row)
+        return _serialize_public_key(row)
+
+
+@router.delete(
+    "/public-keys/{key_id}",
+    summary="Revoke publishable DB key",
+)
+async def revoke_public_key(key_id: int, user: CurrentUser) -> dict[str, Any]:
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = (
+            await sess.execute(
+                sa.select(JsonDbPublicKey).where(
+                    JsonDbPublicKey.id == key_id,
+                    JsonDbPublicKey.owner_user_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, detail={"reason": "public_key_not_found"})
+        if row.revoked_at is None:
+            row.revoked_at = _now()
+            await sess.commit()
+        return {"ok": True}
 
 
 @router.get(

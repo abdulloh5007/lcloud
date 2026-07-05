@@ -24,6 +24,17 @@ export interface LCloudDbOptions {
   endpoint: string;
   apiKey?: string;
   fetch?: typeof fetch;
+  /**
+   * Defaults to "include" so same-origin LCloud web sessions work.
+   * Use "omit" for public, browser-only apps hosted on another origin.
+   */
+  credentials?: RequestCredentials;
+}
+
+export interface LCloudPublicClientOptions {
+  endpoint: string;
+  publishableKey?: string;
+  fetch?: typeof fetch;
 }
 
 export interface CollectionRow {
@@ -35,6 +46,15 @@ export interface CollectionRow {
   write_validator: WriteValidator | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface DbPublicKeyRow {
+  id: number;
+  key: string;
+  prefix: string;
+  label: string;
+  created_at: string | null;
+  revoked_at: string | null;
 }
 
 export interface CloudRow {
@@ -199,8 +219,12 @@ export interface LCloudDbMeta {
     default_read: AccessRule;
     default_write: AccessRule;
     public_base_path: string;
+    publishable_key_path: string;
     owner_manage_path: string;
     write_validator_path: string;
+    publishable_key_manage_path: string;
+    publishable_key_prefix: string;
+    max_publishable_keys_per_user: number;
     public_read_rate_limit: {
       capacity: number;
       window_seconds: number;
@@ -280,15 +304,68 @@ export function createClient(options: LCloudDbOptions): LCloudDbClient {
   return new LCloudDbClient(options);
 }
 
+/**
+ * Public browser/serverless client. This is the Supabase/Firebase-style
+ * frontend mode for LCloud DB: no API key, no cookies, no server proxy.
+ *
+ * It can call `meta()` and `publicCollection(collectionId)` only when the
+ * collection's rules allow public read/write. Configure those rules once from
+ * DB Console or a trusted server-side `createClient({ apiKey })`.
+ */
+export function createPublicClient(
+  options: LCloudPublicClientOptions,
+): LCloudBrowserClient {
+  return new LCloudBrowserClient(options);
+}
+
+export function createBrowserClient(
+  options: LCloudPublicClientOptions & { publishableKey: string },
+): LCloudBrowserClient {
+  return new LCloudBrowserClient(options);
+}
+
+export class LCloudBrowserClient {
+  private readonly client: LCloudDbClient;
+  private readonly publishableKey?: string;
+
+  constructor(options: LCloudPublicClientOptions) {
+    this.client = new LCloudDbClient({ ...options, credentials: "omit" });
+    this.publishableKey = options.publishableKey;
+  }
+
+  collection<T extends JsonObject = JsonObject>(name: string): PublicKeyCollectionRef<T> {
+    if (!this.publishableKey) {
+      throw new Error("publishableKey is required for collection(name)");
+    }
+    return new PublicKeyCollectionRef<T>(this.client, this.publishableKey, name);
+  }
+
+  publicCollection<T extends JsonObject = JsonObject>(
+    collectionId: number,
+  ): PublicCollectionRef<T> {
+    return this.client.publicCollection<T>(collectionId);
+  }
+
+  async meta(): Promise<LCloudDbMeta> {
+    return this.client.meta();
+  }
+
+  url(path: string): string {
+    return this.client.url(path);
+  }
+}
+
 export class LCloudDbClient {
   private readonly endpoint: string;
   private readonly apiKey?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly credentials: RequestCredentials;
 
   constructor(options: LCloudDbOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? fetch;
+    this.credentials = options.credentials ?? "include";
   }
 
   collection<T extends JsonObject = JsonObject>(name: string): CollectionRef<T> {
@@ -317,6 +394,23 @@ export class LCloudDbClient {
     return this.request("/api/v1/db/collections", {
       method: "POST",
       body: JSON.stringify({ name }),
+    });
+  }
+
+  async listPublicKeys(): Promise<DbPublicKeyRow[]> {
+    return this.request("/api/v1/db/public-keys");
+  }
+
+  async createPublicKey(label = ""): Promise<DbPublicKeyRow> {
+    return this.request("/api/v1/db/public-keys", {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    });
+  }
+
+  async revokePublicKey(id: number): Promise<void> {
+    await this.request<void>(`/api/v1/db/public-keys/${id}`, {
+      method: "DELETE",
     });
   }
 
@@ -451,7 +545,7 @@ export class LCloudDbClient {
       headers.set("Authorization", `Bearer ${this.apiKey}`);
     }
     const response = await this.fetchImpl(this.url(path), {
-      credentials: "include",
+      credentials: this.credentials,
       ...init,
       headers,
     });
@@ -489,7 +583,7 @@ export class LCloudDbClient {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", this.url(path));
-      xhr.withCredentials = true;
+      xhr.withCredentials = this.credentials === "include";
       if (this.apiKey) xhr.setRequestHeader("Authorization", `Bearer ${this.apiKey}`);
       xhr.upload.addEventListener("progress", (event) => {
         if (!event.lengthComputable) return;
@@ -697,6 +791,79 @@ export class PublicCollectionRef<T extends JsonObject = JsonObject> {
 
   private get path(): string {
     return `/api/v1/public/db/${this.collectionId}`;
+  }
+
+  async insert(data: T, id?: string): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(this.path, {
+      method: "POST",
+      body: JSON.stringify({ id, data }),
+    });
+  }
+
+  async list(input: { limit?: number; offset?: number } = {}): Promise<Page<DocumentRow<T>>> {
+    const qs = new URLSearchParams();
+    if (input.limit !== undefined) qs.set("limit", String(input.limit));
+    if (input.offset !== undefined) qs.set("offset", String(input.offset));
+    const query = qs.toString();
+    return this.client.request<Page<DocumentRow<T>>>(
+      `${this.path}${query ? `?${query}` : ""}`,
+    );
+  }
+
+  async get(id: string): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`);
+  }
+
+  async set(id: string, data: T): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ data }),
+    });
+  }
+
+  async update(id: string, data: Partial<T>): Promise<DocumentRow<T>> {
+    return this.client.request<DocumentRow<T>>(`${this.path}/${encodePath(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ data }),
+    });
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.client.request<void>(`${this.path}/${encodePath(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async query(input: QueryInput): Promise<Page<DocumentRow<T>>> {
+    return this.client.request<Page<DocumentRow<T>>>(`${this.path}/query`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  watch(onChange: (event: DbChangeEvent) => void, options: WatchOptions = {}): EventSource {
+    const qs = new URLSearchParams();
+    if (options.since !== undefined) qs.set("since", String(options.since));
+    const query = qs.toString();
+    return watchEvents(
+      this.client.url(`${this.path}/events${query ? `?${query}` : ""}`),
+      onChange,
+      options,
+    );
+  }
+}
+
+export class PublicKeyCollectionRef<T extends JsonObject = JsonObject> {
+  constructor(
+    private readonly client: LCloudDbClient,
+    private readonly publishableKey: string,
+    private readonly name: string,
+  ) {}
+
+  private get path(): string {
+    return `/api/v1/public/db/key/${encodePath(this.publishableKey)}/${encodePath(
+      this.name,
+    )}`;
   }
 
   async insert(data: T, id?: string): Promise<DocumentRow<T>> {

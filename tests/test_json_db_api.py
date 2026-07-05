@@ -235,6 +235,74 @@ def test_json_db_public_access_rules(app_client: TestClient) -> None:
     assert public_write.json()["data"]["title"] == "Browser"
 
 
+def test_json_db_publishable_key_public_browser_flow(app_client: TestClient) -> None:
+    _login(app_client)
+
+    key_r = app_client.post("/api/v1/db/public-keys", json={"label": "web"})
+    assert key_r.status_code == 201, key_r.text
+    key_body = key_r.json()
+    assert key_body["key"].startswith("lcpk_")
+    assert key_body["prefix"] == key_body["key"][:13]
+
+    keys = app_client.get("/api/v1/db/public-keys")
+    assert keys.status_code == 200
+    assert keys.json()[0]["key"] == key_body["key"]
+
+    owner_api_key = app_client.post("/api/v1/keys", json={"label": "owner"}).json()[
+        "raw"
+    ]
+    created = app_client.post(
+        "/api/v1/db/collections", json={"name": "website_posts"}
+    )
+    assert created.status_code == 201, created.text
+    rules = app_client.put(
+        "/api/v1/db/collections/website_posts/rules",
+        json={"read": "public", "write": "public"},
+    )
+    assert rules.status_code == 200, rules.text
+    validator = app_client.put(
+        "/api/v1/db/collections/website_posts/validator",
+        json={
+            "max_bytes": 200,
+            "max_fields": 2,
+            "required_fields": ["title"],
+            "allowed_fields": ["title", "status"],
+        },
+    )
+    assert validator.status_code == 200, validator.text
+
+    app_client.cookies.clear()
+    public_create = app_client.post(
+        f"/api/v1/public/db/key/{key_body['key']}/website_posts",
+        json={"id": "hello", "data": {"title": "Hello", "status": "published"}},
+    )
+    assert public_create.status_code == 201, public_create.text
+
+    public_list = app_client.get(
+        f"/api/v1/public/db/key/{key_body['key']}/website_posts"
+    )
+    assert public_list.status_code == 200, public_list.text
+    assert public_list.json()["items"][0]["id"] == "hello"
+
+    public_get = app_client.get(
+        f"/api/v1/public/db/key/{key_body['key']}/website_posts/hello"
+    )
+    assert public_get.status_code == 200
+    assert public_get.json()["data"]["title"] == "Hello"
+
+    revoked = app_client.delete(
+        f"/api/v1/db/public-keys/{key_body['id']}",
+        headers={"Authorization": f"Bearer {owner_api_key}"},
+    )
+    assert revoked.status_code == 200
+
+    app_client.cookies.clear()
+    blocked = app_client.get(
+        f"/api/v1/public/db/key/{key_body['key']}/website_posts"
+    )
+    assert blocked.status_code == 404
+
+
 def test_json_db_sse_events_once(app_client: TestClient) -> None:
     _login(app_client)
     assert app_client.post("/api/v1/db/collections", json={"name": "events"}).status_code == 201

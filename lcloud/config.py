@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     lc_host: str = Field(default="127.0.0.1")
     lc_port: int = Field(default=8787)
     lc_public_base_url: str = Field(default="http://127.0.0.1:8787")
+    # Comma-separated browser origins allowed to call LCloud from another
+    # website, for example:
+    #   LC_CORS_ALLOW_ORIGINS=https://my-site.com,https://app.example.com
+    # Use "*" only for public DB collections/endpoints; never with cookies/API
+    # keys from untrusted browsers.
+    lc_cors_allow_origins: str = Field(default="")
 
     # Workers
     lc_max_workers: int = Field(default=10, ge=1, le=64)
@@ -60,6 +66,14 @@ class Settings(BaseSettings):
     lc_data_dir: Path = Field(default=Path("data"))
     lc_session_file: Path = Field(default=Path("data/session.lcloud"))
     lc_db_url: str = Field(default="sqlite+aiosqlite:///data/lcloud.db")
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.lc_cors_allow_origins.split(",")
+            if origin.strip()
+        ]
 
     @property
     def project_root(self) -> Path:

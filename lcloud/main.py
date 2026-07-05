@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 import sqlalchemy as sa
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -317,6 +318,18 @@ def create_app() -> FastAPI:
         openapi_url=None,
     )
     # Custom mobile-responsive /docs and /redoc + UTF-8 openapi.json
+    settings = get_settings()
+    cors_origins = settings.cors_allow_origins
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials="*" not in cors_origins,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
+
+    # Custom mobile-responsive /docs and /redoc + UTF-8 openapi.json
     app.include_router(docs_router)
     serve_openapi(app)
     install_metrics(app)
@@ -354,7 +367,6 @@ def create_app() -> FastAPI:
     # Mount the built React SPA, if present. In production the frontend is
     # built into `web/dist/`; in dev, the Vite server runs separately on
     # 8788 and proxies API calls to us.
-    settings = get_settings()
     dist_dir = settings.project_root / "web" / "dist"
     assets_dir = dist_dir / "assets"
     index_file = dist_dir / "index.html"

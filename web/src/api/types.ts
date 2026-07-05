@@ -97,6 +97,15 @@ export interface JsonCollectionRow {
   updated_at: string | null;
 }
 
+export interface JsonDbPublicKeyRow {
+  id: number;
+  key: string;
+  prefix: string;
+  label: string;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
 export interface JsonDocumentRow {
   id: string;
   collection_id: number;

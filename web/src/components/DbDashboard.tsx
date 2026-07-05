@@ -9,6 +9,7 @@ import {
   Database,
   FileJson,
   Globe2,
+  KeyRound,
   Plus,
   RefreshCw,
   Save,
@@ -21,6 +22,7 @@ import type {
   JsonAccessRule,
   JsonCollectionRow,
   JsonDbEvent,
+  JsonDbPublicKeyRow,
   JsonDocumentRow,
   JsonQueryInput,
   JsonWhereOp,
@@ -36,12 +38,13 @@ const RULES: JsonAccessRule[] = ["owner", "authenticated", "public"];
 const OPS: JsonWhereOp[] = ["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"];
 
 type WriteMode = "create" | "set" | "patch";
-type DbPage = "documents" | "editor" | "rules" | "events";
+type DbPage = "documents" | "editor" | "rules" | "keys" | "events";
 
 const DB_PAGES: Array<{ id: DbPage; label: string; icon: LucideIcon }> = [
   { id: "documents", label: "Documents", icon: FileJson },
   { id: "editor", label: "Editor", icon: Braces },
   { id: "rules", label: "Rules", icon: Globe2 },
+  { id: "keys", label: "Keys", icon: KeyRound },
   { id: "events", label: "Events", icon: Activity },
 ];
 
@@ -108,6 +111,8 @@ export function DbDashboard() {
   const [lastEventId, setLastEventId] = useState(0);
   const [copiedPath, setCopiedPath] = useState(false);
   const [activePage, setActivePage] = useState<DbPage>("documents");
+  const [newPublicKeyLabel, setNewPublicKeyLabel] = useState("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const collectionsQ = useQuery({
     queryKey: ["json-db", "collections"],
@@ -164,6 +169,11 @@ export function DbDashboard() {
     queryKey: ["json-db", "validator", selectedName],
     enabled: Boolean(selectedName),
     queryFn: () => jsonDb.getValidator(selectedName),
+  });
+
+  const publicKeysQ = useQuery({
+    queryKey: ["json-db", "public-keys"],
+    queryFn: () => jsonDb.listPublicKeys(),
   });
 
   useEffect(() => {
@@ -301,6 +311,22 @@ export function DbDashboard() {
       setValidatorError(null);
       void qc.invalidateQueries({ queryKey: ["json-db", "validator", selectedName] });
       void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+    },
+  });
+
+  const createPublicKey = useMutation({
+    mutationFn: (label: string) => jsonDb.createPublicKey(label),
+    onSuccess: (row) => {
+      setNewPublicKeyLabel("");
+      setCopiedKey(row.key);
+      void qc.invalidateQueries({ queryKey: ["json-db", "public-keys"] });
+    },
+  });
+
+  const revokePublicKey = useMutation({
+    mutationFn: (id: number) => jsonDb.revokePublicKey(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["json-db", "public-keys"] });
     },
   });
 
@@ -863,6 +889,113 @@ export function DbDashboard() {
               <section
                 className={classNames(
                   "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
+                  activePage !== "keys" && "hidden",
+                )}
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  <KeyRound size={15} className="text-neutral-400" />
+                  <div>
+                    <h2 className="text-sm font-semibold">Publishable DB keys</h2>
+                    <p className="text-xs text-neutral-500">
+                      Safe for frontend env. Access still depends on public collection rules.
+                    </p>
+                  </div>
+                </div>
+                <form
+                  className="flex flex-wrap gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    createPublicKey.mutate(newPublicKeyLabel.trim());
+                  }}
+                >
+                  <input
+                    value={newPublicKeyLabel}
+                    onChange={(e) => setNewPublicKeyLabel(e.target.value)}
+                    placeholder="website, landing-page, docs"
+                    maxLength={64}
+                    className="min-w-[14rem] flex-1 rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    loading={createPublicKey.isPending}
+                  >
+                    <Plus size={14} />
+                    Create key
+                  </Button>
+                </form>
+                {createPublicKey.isError && (
+                  <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+                    {errorText(createPublicKey.error)}
+                  </div>
+                )}
+                {copiedKey && (
+                  <div className="mt-3 rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">
+                    <div className="mb-2 flex items-center gap-1.5 font-semibold">
+                      <Check size={14} />
+                      Publishable key created
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <code className="min-w-0 flex-1 truncate rounded-md bg-white px-2 py-1.5 font-mono dark:bg-neutral-950">
+                        {copiedKey}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(copiedKey)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-600 text-white transition-[background-color,scale] duration-150 ease-out hover:bg-emerald-700 active:scale-[0.96]"
+                        aria-label="Copy publishable key"
+                        title="Copy"
+                      >
+                        <Copy size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 rounded-lg bg-bg p-3 text-xs text-neutral-600 dark:bg-bg-dark dark:text-neutral-300">
+                  <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                    Frontend usage
+                  </div>
+                  <pre className="mt-2 overflow-x-auto whitespace-pre rounded-md bg-neutral-950 p-3 font-mono text-[11px] leading-5 text-neutral-100">
+{`VITE_LCLOUD_ENDPOINT=https://your-lcloud-host
+VITE_LCLOUD_DB_KEY=lcpk_...
+
+const db = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+});
+await db.collection("posts").list({ limit: 20 });`}
+                  </pre>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {publicKeysQ.isLoading && (
+                    <div className="text-sm text-neutral-500">…</div>
+                  )}
+                  {publicKeysQ.data?.length === 0 && (
+                    <div className="rounded-lg bg-bg px-3 py-6 text-center text-sm text-neutral-400 dark:bg-bg-dark">
+                      No publishable DB keys yet.
+                    </div>
+                  )}
+                  {publicKeysQ.data?.map((row) => (
+                    <PublicKeyRow
+                      key={row.id}
+                      row={row}
+                      onCopy={() => {
+                        void navigator.clipboard.writeText(row.key);
+                        setCopiedKey(row.key);
+                      }}
+                      onRevoke={() => {
+                        if (window.confirm(`Revoke ${row.prefix}…?`)) {
+                          revokePublicKey.mutate(row.id);
+                        }
+                      }}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              <section
+                className={classNames(
+                  "rounded-lg bg-panel p-3 surface-shadow dark:bg-panel-dark",
                   activePage !== "events" && "hidden",
                 )}
               >
@@ -937,6 +1070,61 @@ function CollectionButton({
         </span>
       </span>
     </button>
+  );
+}
+
+function PublicKeyRow({
+  row,
+  onCopy,
+  onRevoke,
+}: {
+  row: JsonDbPublicKeyRow;
+  onCopy: () => void;
+  onRevoke: () => void;
+}) {
+  const revoked = row.revoked_at !== null;
+  return (
+    <div
+      className={classNames(
+        "flex items-center gap-3 rounded-lg bg-bg px-3 py-2 text-sm dark:bg-bg-dark",
+        revoked && "opacity-50",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <code className="truncate font-mono">{row.key}</code>
+          {revoked && (
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+              revoked
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-neutral-500">
+          {row.label && <span>{row.label}</span>}
+          <span className="tabular-nums">created {formatDate(row.created_at)}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 transition-[background-color,color,scale] duration-150 ease-out hover:bg-neutral-100 hover:text-blue-600 active:scale-[0.96] dark:hover:bg-neutral-800"
+        aria-label="Copy publishable key"
+        title="Copy"
+      >
+        <Copy size={14} />
+      </button>
+      {!revoked && (
+        <button
+          type="button"
+          onClick={onRevoke}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 transition-[background-color,color,scale] duration-150 ease-out hover:bg-red-50 hover:text-red-600 active:scale-[0.96] dark:hover:bg-red-950/30"
+          aria-label="Revoke publishable key"
+          title="Revoke"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
+    </div>
   );
 }
 

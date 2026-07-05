@@ -58,6 +58,49 @@ def test_health_endpoint(isolated_app: TestClient) -> None:
     assert resp.json() == {"status": "ok", "version": __version__}
 
 
+def test_cors_preflight_for_allowed_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_file = tmp_path / "lcloud.db"
+    monkeypatch.setenv("LC_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LC_DB_URL", f"sqlite+aiosqlite:///{db_file}")
+    monkeypatch.setenv("TG_API_ID", "0")
+    monkeypatch.setenv("TG_API_HASH", "")
+    monkeypatch.setenv("LC_ADMIN_TG_ID", "0")
+    monkeypatch.setenv("LC_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LC_CORS_ALLOW_ORIGINS", "https://static.example")
+
+    from lcloud.config import get_settings
+    from lcloud.db import base as base_mod
+    from lcloud.userbot.client import set_userbot_manager
+
+    get_settings.cache_clear()
+    base_mod._engine = None
+    base_mod._sessionmaker = None
+    set_userbot_manager(None)
+
+    from lcloud.main import create_app
+
+    try:
+        with TestClient(create_app()) as client:
+            resp = client.options(
+                "/api/v1/public/db/1",
+                headers={
+                    "Origin": "https://static.example",
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers["access-control-allow-origin"] == (
+                "https://static.example"
+            )
+    finally:
+        get_settings.cache_clear()
+        base_mod._engine = None
+        base_mod._sessionmaker = None
+        set_userbot_manager(None)
+
+
 def test_root_endpoint(isolated_app: TestClient) -> None:
     """`GET /` either serves the built SPA index.html (production) or a
     JSON fallback when the frontend isn't built. Accept both shapes."""

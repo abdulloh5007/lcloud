@@ -12,6 +12,9 @@ ID/URL inside JSON documents.
 
 ## Always use these primitives
 
+For trusted server-side code, CLIs, CI jobs, workers, and AI agents with a
+secret API key:
+
 ```ts
 import { createClient } from "@lcloud/db";
 
@@ -49,9 +52,30 @@ const publicUsers = db.publicCollection(rules.collection_id);
 const publicAlice = await publicUsers.get("alice");
 ```
 
+For a browser-only static site with no backend, use a publishable DB key:
+
+```ts
+import { createBrowserClient } from "@lcloud/db";
+
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+});
+
+const posts = lcloud.collection<Post>("posts");
+
+const page = await posts.list({ limit: 20 });
+```
+
+Use `VITE_LCLOUD_DB_KEY=lcpk_...`, not `LCLOUD_API_KEY`, in frontend env.
+Frontend env vars are public after build.
+
 ## Never do these
 
 - Do not expose `LCLOUD_API_KEY` in public browser bundles.
+- Do not put owner API keys in `VITE_*`, `NEXT_PUBLIC_*`, or client-side `.env`.
+- Do not create a local JSON DB fallback when LCloud endpoint/collection ID is
+  configured; use LCloud as the source of truth.
 - Do not write directly to SQLite tables from app code.
 - Do not store large files/base64 blobs in JSON documents.
 - Do not use raw `fetch` for media unless the SDK cannot be used.
@@ -159,6 +183,23 @@ await db.collection("posts").setValidator({
 
 const publicPosts = db.publicCollection(rules.collection_id);
 const page = await publicPosts.list({ limit: 20 });
+```
+
+For a plain browser site, the setup above is done once by an admin/server
+script or in DB Console. The browser uses only:
+
+```ts
+const lcloud = createBrowserClient({
+  endpoint: "https://your-lcloud-host",
+  publishableKey: "lcpk_...",
+});
+const publicPosts = lcloud.collection("posts");
+```
+
+If the browser site is hosted on a different origin, configure:
+
+```env
+LC_CORS_ALLOW_ORIGINS=https://my-site.com
 ```
 
 Rules:
