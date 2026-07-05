@@ -3,7 +3,9 @@
 LCloud DB is a JSON document database API built into LCloud. It gives apps a
 Firebase/Supabase-like developer experience while storing the materialized
 index in LCloud's database and writing every change to an append-only JSON
-operation log designed for future Telegram snapshot/segment persistence.
+operation log designed for future Telegram snapshot/segment persistence. The
+JavaScript SDK also includes media storage helpers for uploading files/photos/
+videos to LCloud's Telegram-backed file storage.
 
 Current status: MVP document database. Good for small apps, dashboards, bots,
 personal tools, CMS-like content, and prototypes that need a simple hosted JSON
@@ -19,7 +21,7 @@ complex analytics, or transactional financial systems.
 | Firebase Firestore | collections and JSON documents, but without realtime listeners yet |
 | Supabase | REST API + API key auth, but document-oriented instead of table-oriented |
 | SQLite/Postgres | LCloud currently uses SQL as the local materialized index; callers use JSON docs |
-| S3/object storage | not the right model; LCloud DB stores small JSON documents, not blobs |
+| S3/object storage | use SDK media helpers for files; keep only file IDs/URLs in JSON docs |
 
 ## Storage model
 
@@ -247,6 +249,45 @@ const page = await users.query({
 console.log(page.items.map((row) => row.data.name));
 ```
 
+### SDK media storage
+
+The same SDK can upload media/files through the existing LCloud file API:
+
+```ts
+const clouds = await db.listClouds();
+const mediaCloud = clouds[0] ?? await db.createCloud("app-media");
+
+const uploaded = await db.cloud(mediaCloud.id).upload(fileOrBlob, {
+  name: "avatar.png",
+  compress: true,
+  onProgress(progress) {
+    console.log(progress.percent);
+  },
+});
+
+await db.collection("users").update("alice", {
+  avatar_file_id: uploaded.id,
+  avatar_url: db.file(uploaded.id).downloadUrl(),
+});
+```
+
+Available media methods:
+
+```ts
+await db.listClouds();
+await db.createCloud("app-media");
+await db.deleteCloud(cloudId);
+
+await db.cloud(cloudId).listFiles({ limit: 50, offset: 0 });
+await db.cloud(cloudId).upload(fileOrBlob, { name: "photo.jpg", compress: true });
+
+db.file(fileId).downloadUrl();
+await db.file(fileId).delete();
+```
+
+The REST media/file API remains unchanged. SDK media helpers are a convenience
+layer over `/api/v1/clouds`, `/api/v1/clouds/{id}/files`, and `/api/v1/files`.
+
 ## Response shapes
 
 Collection:
@@ -346,6 +387,9 @@ and writes in one controlled operation.
 - `PATCH` is shallow: it merges top-level fields only.
 - No document-level public rules yet; auth is per-user.
 - Telegram snapshot/segment flushing is planned but not active in the MVP.
+- SDK media uploads use the existing LCloud file API. Built-in client-side LC2
+  signing helper is not bundled yet; advanced callers may pass LC2 fields
+  manually.
 
 ## Roadmap
 
@@ -355,4 +399,3 @@ and writes in one controlled operation.
 4. Realtime change stream over WebSocket/SSE.
 5. Access rules for public/client-side app usage.
 6. Admin dashboard for collections/documents.
-

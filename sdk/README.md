@@ -1,7 +1,8 @@
 # @lcloud/db
 
 TypeScript client for LCloud DB, a JSON document database API built into
-LCloud.
+LCloud. The SDK also includes LCloud media storage helpers, so apps can store
+JSON documents and upload files/media through one client.
 
 ```bash
 npm install @lcloud/db
@@ -28,6 +29,17 @@ const admins = await users.query({
 });
 
 console.log(admins.items);
+
+const clouds = await db.listClouds();
+const uploaded = await db.cloud(clouds[0].id).upload(
+  new Blob(["hello"], { type: "text/plain" }),
+  { name: "hello.txt" },
+);
+
+await users.update("alice", {
+  avatar_file_id: uploaded.id,
+  avatar_url: db.file(uploaded.id).downloadUrl(),
+});
 ```
 
 ## API
@@ -77,6 +89,57 @@ await pinned.get();
 await pinned.update({ edited: true });
 ```
 
+### Media storage
+
+List or create media clouds:
+
+```ts
+const clouds = await db.listClouds();
+const cloud = await db.createCloud("app-media");
+```
+
+Upload a file:
+
+```ts
+const file = await db.cloud(cloud.id).upload(browserFile, {
+  compress: true,
+  onProgress(progress) {
+    console.log(progress.percent);
+  },
+});
+```
+
+In Node 20+:
+
+```ts
+const blob = new Blob([await readFile("avatar.png")], { type: "image/png" });
+const file = await db.cloud(cloud.id).upload(blob, {
+  name: "avatar.png",
+  compress: false,
+});
+```
+
+Store the uploaded file reference in a document:
+
+```ts
+await db.collection("users").update("alice", {
+  avatar_file_id: file.id,
+  avatar_url: db.file(file.id).downloadUrl(),
+});
+```
+
+List files:
+
+```ts
+const page = await db.cloud(cloud.id).listFiles({ limit: 50 });
+```
+
+Delete a file:
+
+```ts
+await db.file(file.id).delete();
+```
+
 ### Query
 
 ```ts
@@ -121,4 +184,3 @@ try {
 Do not put API keys into public frontend bundles. Use API keys from server-side
 code, CLIs, workers, or trusted automation. Browser apps should use an existing
 LCloud web session or call your own backend.
-

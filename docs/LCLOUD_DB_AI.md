@@ -6,7 +6,9 @@ Use this file when an AI agent needs to write code against LCloud DB.
 
 LCloud DB is a JSON document database with collections and documents.
 It is similar to a small Firestore-style API, not SQL. Do not generate SQL for
-app code. Use the REST API or the `@lcloud/db` SDK.
+app code. Use the REST API or the `@lcloud/db` SDK. For files, photos, videos,
+and other binary media, use the SDK media helpers and store the returned file
+ID/URL inside JSON documents.
 
 ## Always use these primitives
 
@@ -29,6 +31,12 @@ await users.insert({ name: "Alice" }, "alice");
 const alice = await users.get("alice");
 await users.update("alice", { online: true });
 await users.delete("alice");
+
+const clouds = await db.listClouds();
+const uploaded = await db.cloud(clouds[0].id).upload(fileOrBlob, {
+  name: "avatar.png",
+});
+await users.update("alice", { avatar_file_id: uploaded.id });
 ```
 
 ## Never do these
@@ -36,6 +44,7 @@ await users.delete("alice");
 - Do not expose `LCLOUD_API_KEY` in public browser bundles.
 - Do not write directly to SQLite tables from app code.
 - Do not store large files/base64 blobs in JSON documents.
+- Do not use raw `fetch` for media unless the SDK cannot be used.
 - Do not assume joins, SQL transactions, or realtime listeners exist.
 - Do not create collection names with spaces, slashes, or leading numbers.
 - Do not manually concatenate unescaped document IDs into URLs; use the SDK.
@@ -162,6 +171,53 @@ Delete:
 await db.collection("posts").delete("post_123");
 ```
 
+## Media snippets
+
+List clouds:
+
+```ts
+const clouds = await db.listClouds();
+```
+
+Create a media cloud if needed:
+
+```ts
+const cloud = await db.createCloud("app-media");
+```
+
+Upload media:
+
+```ts
+const uploaded = await db.cloud(cloud.id).upload(fileOrBlob, {
+  name: "photo.jpg",
+  compress: true,
+  onProgress(progress) {
+    console.log(progress.percent);
+  },
+});
+```
+
+Store media reference in a document:
+
+```ts
+await db.collection("posts").update("post_123", {
+  cover_file_id: uploaded.id,
+  cover_url: db.file(uploaded.id).downloadUrl(),
+});
+```
+
+List files:
+
+```ts
+const files = await db.cloud(cloud.id).listFiles({ limit: 50 });
+```
+
+Delete file:
+
+```ts
+await db.file(uploaded.id).delete();
+```
+
 ## REST fallback
 
 If SDK cannot be used, call:
@@ -264,4 +320,3 @@ Use top-level fields for common filters:
 ```
 
 Avoid hiding filter fields deep inside large nested objects unless needed.
-
