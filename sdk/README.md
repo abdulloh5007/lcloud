@@ -22,6 +22,10 @@ const users = db.collection("users");
 
 await users.insert({ name: "Alice", role: "admin" }, "alice");
 await users.update("alice", { online: true });
+await users.batch([
+  { op: "set", id: "bob", data: { name: "Bob", role: "user" } },
+  { op: "update", id: "alice", data: { online: false } },
+]);
 
 const admins = await users.query({
   where: [{ field: "role", op: "==", value: "admin" }],
@@ -30,8 +34,8 @@ const admins = await users.query({
 
 console.log(admins.items);
 
-const clouds = await db.listClouds();
-const uploaded = await db.cloud(clouds[0].id).upload(
+const media = await db.ensureCloud("app-media");
+const uploaded = await db.cloud(media.id).upload(
   new Blob(["hello"], { type: "text/plain" }),
   { name: "hello.txt" },
 );
@@ -81,6 +85,19 @@ await posts.update("pinned", { edited: true });
 await posts.delete("pinned");
 ```
 
+Atomic batch writes:
+
+```ts
+await posts.batch([
+  { op: "create", id: "draft", data: { title: "Draft" } },
+  { op: "set", id: "published", data: { title: "Published" } },
+  { op: "update", id: "pinned", data: { edited: true } },
+  { op: "delete", id: "old-post" },
+]);
+```
+
+If one write fails, none of the writes are committed.
+
 Document refs:
 
 ```ts
@@ -96,6 +113,7 @@ List or create media clouds:
 ```ts
 const clouds = await db.listClouds();
 const cloud = await db.createCloud("app-media");
+const existingOrNew = await db.ensureCloud("app-media");
 ```
 
 Upload a file:

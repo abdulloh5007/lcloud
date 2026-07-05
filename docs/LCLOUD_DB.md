@@ -249,13 +249,25 @@ const page = await users.query({
 console.log(page.items.map((row) => row.data.name));
 ```
 
+Atomic batch writes:
+
+```ts
+await users.batch([
+  { op: "create", id: "bob", data: { name: "Bob", role: "user" } },
+  { op: "update", id: "alice", data: { score: 12 } },
+  { op: "delete", id: "old_user" },
+]);
+```
+
+The batch endpoint commits all writes in one transaction. If any write fails,
+none of the writes are saved.
+
 ### SDK media storage
 
 The same SDK can upload media/files through the existing LCloud file API:
 
 ```ts
-const clouds = await db.listClouds();
-const mediaCloud = clouds[0] ?? await db.createCloud("app-media");
+const mediaCloud = await db.ensureCloud("app-media");
 
 const uploaded = await db.cloud(mediaCloud.id).upload(fileOrBlob, {
   name: "avatar.png",
@@ -276,6 +288,7 @@ Available media methods:
 ```ts
 await db.listClouds();
 await db.createCloud("app-media");
+await db.ensureCloud("app-media");
 await db.deleteCloud(cloudId);
 
 await db.cloud(cloudId).listFiles({ limit: 50, offset: 0 });

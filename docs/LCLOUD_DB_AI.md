@@ -30,10 +30,14 @@ const users = db.collection("users");
 await users.insert({ name: "Alice" }, "alice");
 const alice = await users.get("alice");
 await users.update("alice", { online: true });
+await users.batch([
+  { op: "set", id: "bob", data: { name: "Bob", online: false } },
+  { op: "update", id: "alice", data: { online: false } },
+]);
 await users.delete("alice");
 
-const clouds = await db.listClouds();
-const uploaded = await db.cloud(clouds[0].id).upload(fileOrBlob, {
+const media = await db.ensureCloud("app-media");
+const uploaded = await db.cloud(media.id).upload(fileOrBlob, {
   name: "avatar.png",
 });
 await users.update("alice", { avatar_file_id: uploaded.id });
@@ -171,6 +175,19 @@ Delete:
 await db.collection("posts").delete("post_123");
 ```
 
+Atomic batch writes:
+
+```ts
+await db.collection("posts").batch([
+  { op: "create", id: "draft", data: { title: "Draft" } },
+  { op: "set", id: "published", data: { title: "Published" } },
+  { op: "update", id: "post_123", data: { edited: true } },
+  { op: "delete", id: "old_post" },
+]);
+```
+
+Use batch when multiple writes must succeed or fail together.
+
 ## Media snippets
 
 List clouds:
@@ -182,7 +199,7 @@ const clouds = await db.listClouds();
 Create a media cloud if needed:
 
 ```ts
-const cloud = await db.createCloud("app-media");
+const cloud = await db.ensureCloud("app-media");
 ```
 
 Upload media:

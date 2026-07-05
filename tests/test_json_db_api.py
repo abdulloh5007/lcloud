@@ -175,3 +175,59 @@ def test_json_db_bearer_api_key_auth(app_client: TestClient) -> None:
     )
     assert got.status_code == 200
     assert got.json()["data"]["title"] == "Hello"
+
+
+def test_json_db_batch_writes_are_atomic(app_client: TestClient) -> None:
+    _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "tasks"}).status_code == 201
+
+    batch = app_client.post(
+        "/api/v1/db/tasks/batch",
+        json={
+            "writes": [
+                {"op": "create", "id": "one", "data": {"title": "One", "done": False}},
+                {"op": "set", "id": "two", "data": {"title": "Two", "done": False}},
+                {"op": "update", "id": "one", "data": {"done": True}},
+            ]
+        },
+    )
+    assert batch.status_code == 200, batch.text
+    assert batch.json()["total"] == 3
+
+    one = app_client.get("/api/v1/db/tasks/one")
+    assert one.status_code == 200
+    assert one.json()["data"] == {"title": "One", "done": True}
+    assert one.json()["version"] == 2
+
+    failed = app_client.post(
+        "/api/v1/db/tasks/batch",
+        json={
+            "writes": [
+                {"op": "set", "id": "three", "data": {"title": "Three"}},
+                {"op": "update", "id": "missing", "data": {"done": True}},
+            ]
+        },
+    )
+    assert failed.status_code == 404
+    assert app_client.get("/api/v1/db/tasks/three").status_code == 404
+
+
+def test_json_db_create_can_reuse_deleted_document_id(app_client: TestClient) -> None:
+    _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "notes"}).status_code == 201
+    assert (
+        app_client.post(
+            "/api/v1/db/notes",
+            json={"id": "same", "data": {"title": "v1"}},
+        ).status_code
+        == 201
+    )
+    assert app_client.delete("/api/v1/db/notes/same").status_code == 204
+
+    recreated = app_client.post(
+        "/api/v1/db/notes",
+        json={"id": "same", "data": {"title": "v2"}},
+    )
+    assert recreated.status_code == 201, recreated.text
+    assert recreated.json()["data"]["title"] == "v2"
+    assert recreated.json()["version"] == 3

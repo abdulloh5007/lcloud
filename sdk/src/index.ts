@@ -90,6 +90,24 @@ export interface QueryInput {
   offset?: number;
 }
 
+export type BatchWrite<T extends JsonObject = JsonObject> =
+  | { op: "create"; id?: string; data: T }
+  | { op: "set"; id: string; data: T }
+  | { op: "update"; id: string; data: Partial<T> }
+  | { op: "delete"; id: string };
+
+export interface BatchWriteResult<T extends JsonObject = JsonObject> {
+  index: number;
+  op: BatchWrite<T>["op"];
+  id: string;
+  document: DocumentRow<T> | null;
+}
+
+export interface BatchResult<T extends JsonObject = JsonObject> {
+  items: BatchWriteResult<T>[];
+  total: number;
+}
+
 export interface UploadProgress {
   loaded: number;
   total: number;
@@ -185,6 +203,12 @@ export class LCloudDbClient {
       method: "POST",
       body: JSON.stringify({ name }),
     });
+  }
+
+  async ensureCloud(name: string): Promise<CloudRow> {
+    const found = (await this.listClouds()).find((row) => row.name === name);
+    if (found) return found;
+    return this.createCloud(name);
   }
 
   async deleteCloud(id: number): Promise<void> {
@@ -389,6 +413,13 @@ export class CollectionRef<T extends JsonObject = JsonObject> {
     return this.client.request<Page<DocumentRow<T>>>(`${this.path}/query`, {
       method: "POST",
       body: JSON.stringify(input),
+    });
+  }
+
+  async batch(writes: BatchWrite<T>[]): Promise<BatchResult<T>> {
+    return this.client.request<BatchResult<T>>(`${this.path}/batch`, {
+      method: "POST",
+      body: JSON.stringify({ writes }),
     });
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@lcloud/db",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript client for LCloud DB JSON document collections.",
   "type": "module",
   "main": "dist/index.js",

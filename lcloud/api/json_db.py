@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Path, Query, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lcloud.auth.v2_deps import CurrentUser
@@ -63,6 +63,37 @@ class SetDocIn(BaseModel):
 
 class PatchDocIn(BaseModel):
     data: dict[str, Any]
+
+
+BatchOp = Literal["create", "set", "update", "delete"]
+
+
+class BatchWriteIn(BaseModel):
+    op: BatchOp
+    id: str | None = Field(default=None, min_length=1, max_length=128)
+    data: dict[str, Any] | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        doc_id = value.strip()
+        if not DOC_ID_RE.match(doc_id):
+            raise ValueError("invalid_document_id")
+        return doc_id
+
+    @model_validator(mode="after")
+    def validate_write(self) -> BatchWriteIn:
+        if self.op in {"set", "update", "delete"} and self.id is None:
+            raise ValueError("document_id_required")
+        if self.op in {"create", "set", "update"} and self.data is None:
+            raise ValueError("document_data_required")
+        return self
+
+
+class BatchIn(BaseModel):
+    writes: list[BatchWriteIn] = Field(min_length=1, max_length=100)
 
 
 WhereOp = Literal["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"]
@@ -211,6 +242,22 @@ async def _get_document_or_404(
     return row
 
 
+async def _find_document(
+    sess: AsyncSession,
+    *,
+    collection_id: int,
+    doc_id: str,
+) -> JsonDocument | None:
+    return (
+        await sess.execute(
+            sa.select(JsonDocument).where(
+                JsonDocument.collection_id == collection_id,
+                JsonDocument.doc_id == doc_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 def _operation(
     collection_id: int,
     doc_id: str | None,
@@ -351,28 +398,27 @@ async def create_document(
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
-        existing = (
-            await sess.execute(
-                sa.select(JsonDocument).where(
-                    JsonDocument.collection_id == coll.id,
-                    JsonDocument.doc_id == doc_id,
-                    JsonDocument.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
+        existing = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+        if existing is not None and existing.deleted_at is None:
             raise HTTPException(409, detail={"reason": "document_exists"})
 
         now = _now()
-        row = JsonDocument(
-            collection_id=coll.id,
-            doc_id=doc_id,
-            data_json=_json_dumps(body.data),
-            version=1,
-            updated_at=now,
-        )
+        if existing is None:
+            row = JsonDocument(
+                collection_id=coll.id,
+                doc_id=doc_id,
+                data_json=_json_dumps(body.data),
+                version=1,
+                updated_at=now,
+            )
+            sess.add(row)
+        else:
+            row = existing
+            row.data_json = _json_dumps(body.data)
+            row.version += 1
+            row.updated_at = now
+            row.deleted_at = None
         coll.updated_at = now
-        sess.add(row)
         await sess.flush()
         sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
         await sess.commit()
@@ -441,6 +487,130 @@ async def query_documents(
         "total": len(matched),
         "limit": body.limit,
         "offset": body.offset,
+    }
+
+
+@router.post(
+    "/{collection}/batch",
+    summary="Atomically write multiple JSON documents",
+    description=(
+        "Runs up to 100 create/set/update/delete operations in one database "
+        "transaction. If one operation fails, none of the writes are committed."
+    ),
+)
+async def batch_documents(
+    body: BatchIn,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+) -> dict[str, Any]:
+    name = _validate_collection_name(collection)
+    now = _now()
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        results: list[dict[str, Any]] = []
+        changed_rows: list[JsonDocument] = []
+
+        for index, write in enumerate(body.writes):
+            doc_id = write.id or _new_doc_id()
+            doc_id = _validate_doc_id(doc_id)
+            data = write.data
+
+            if write.op == "create":
+                row = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+                if row is not None and row.deleted_at is None:
+                    raise HTTPException(
+                        409,
+                        detail={
+                            "reason": "document_exists",
+                            "index": index,
+                            "id": doc_id,
+                        },
+                    )
+                assert data is not None
+                if row is None:
+                    row = JsonDocument(
+                        collection_id=coll.id,
+                        doc_id=doc_id,
+                        data_json=_json_dumps(data),
+                        version=1,
+                        updated_at=now,
+                    )
+                    sess.add(row)
+                else:
+                    row.data_json = _json_dumps(data)
+                    row.version += 1
+                    row.updated_at = now
+                    row.deleted_at = None
+                sess.add(_operation(coll.id, doc_id, "create", {"data": data}))
+                await sess.flush()
+                changed_rows.append(row)
+                results.append({"index": index, "op": write.op, "id": doc_id})
+                continue
+
+            if write.op == "set":
+                assert data is not None
+                row = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
+                if row is None:
+                    row = JsonDocument(
+                        collection_id=coll.id,
+                        doc_id=doc_id,
+                        data_json=_json_dumps(data),
+                        version=1,
+                        updated_at=now,
+                        deleted_at=None,
+                    )
+                    sess.add(row)
+                    op = "create"
+                else:
+                    row.data_json = _json_dumps(data)
+                    row.version += 1
+                    row.updated_at = now
+                    row.deleted_at = None
+                    op = "set"
+                sess.add(_operation(coll.id, doc_id, op, {"data": data}))
+                await sess.flush()
+                changed_rows.append(row)
+                results.append({"index": index, "op": write.op, "id": doc_id})
+                continue
+
+            if write.op == "update":
+                assert data is not None
+                row = await _get_document_or_404(
+                    sess, collection_id=coll.id, doc_id=doc_id
+                )
+                merged = _json_loads(row.data_json)
+                merged.update(data)
+                row.data_json = _json_dumps(merged)
+                row.version += 1
+                row.updated_at = now
+                sess.add(_operation(coll.id, doc_id, "patch", {"data": data}))
+                changed_rows.append(row)
+                results.append({"index": index, "op": write.op, "id": doc_id})
+                continue
+
+            row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+            row.deleted_at = now
+            row.version += 1
+            row.updated_at = now
+            sess.add(_operation(coll.id, doc_id, "delete", {}))
+            results.append({"index": index, "op": write.op, "id": doc_id})
+
+        coll.updated_at = now
+        await sess.commit()
+        for row in changed_rows:
+            await sess.refresh(row)
+
+    serialized = {row.doc_id: _serialize_document(row) for row in changed_rows}
+    return {
+        "items": [
+            {
+                **result,
+                "document": serialized.get(result["id"]),
+            }
+            for result in results
+        ],
+        "total": len(results),
     }
 
 
