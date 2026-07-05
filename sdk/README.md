@@ -118,6 +118,30 @@ Public write validators apply to `db.publicCollection(id).insert/set/update()`:
 Public routes are rate-limited per IP. Read limit and write limit are exposed
 by `await db.meta()`.
 
+### Realtime
+
+Watch owner/cookie-access collections:
+
+```ts
+const source = db.collection("posts").watch((event) => {
+  console.log(event.op, event.doc_id, event.payload);
+});
+
+source.close();
+```
+
+Watch public collections:
+
+```ts
+const source = db.publicCollection(rules.collection_id).watch((event) => {
+  console.log(event.op, event.doc_id);
+});
+```
+
+Realtime uses Server-Sent Events. Browser `EventSource` cannot send custom
+Authorization headers, so API-key clients should use it from same-origin cookie
+sessions or public collections.
+
 ### Documents
 
 ```ts

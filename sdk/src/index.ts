@@ -113,6 +113,20 @@ export interface BatchResult<T extends JsonObject = JsonObject> {
   total: number;
 }
 
+export interface DbChangeEvent {
+  id: number;
+  collection_id: number;
+  doc_id: string | null;
+  op: string;
+  payload: JsonObject;
+  created_at: string | null;
+}
+
+export interface WatchOptions {
+  since?: number;
+  onError?: (event: Event) => void;
+}
+
 export interface CollectionRules {
   collection: string;
   collection_id: number;
@@ -169,6 +183,16 @@ export interface LCloudDbMeta {
     max_writes: number;
     operations: BatchWrite["op"][];
     atomic: boolean;
+  };
+  realtime: {
+    transport: "sse";
+    event: "lcloud.db.change";
+    owner_path: string;
+    public_path: string;
+    cursor: string;
+    query_params: string[];
+    poll_seconds: number;
+    batch_limit: number;
   };
   access_rules: {
     rules: AccessRule[];
@@ -520,6 +544,24 @@ function parseXhrError(xhr: XMLHttpRequest): LCloudDbError {
   return new LCloudDbError(xhr.status, reason, detail);
 }
 
+function watchEvents(
+  url: string,
+  onChange: (event: DbChangeEvent) => void,
+  options: WatchOptions = {},
+): EventSource {
+  if (typeof EventSource === "undefined") {
+    throw new Error("EventSource is not available in this runtime");
+  }
+  const source = new EventSource(url, { withCredentials: true });
+  source.addEventListener("lcloud.db.change", (event) => {
+    onChange(JSON.parse((event as MessageEvent).data) as DbChangeEvent);
+  });
+  if (options.onError) {
+    source.addEventListener("error", options.onError);
+  }
+  return source;
+}
+
 export class CollectionRef<T extends JsonObject = JsonObject> {
   constructor(
     private readonly client: LCloudDbClient,
@@ -599,6 +641,17 @@ export class CollectionRef<T extends JsonObject = JsonObject> {
 
   async deleteValidator(): Promise<void> {
     await this.client.deleteCollectionValidator(this.name);
+  }
+
+  watch(onChange: (event: DbChangeEvent) => void, options: WatchOptions = {}): EventSource {
+    const qs = new URLSearchParams();
+    if (options.since !== undefined) qs.set("since", String(options.since));
+    const query = qs.toString();
+    return watchEvents(
+      this.client.url(`${this.path}/events${query ? `?${query}` : ""}`),
+      onChange,
+      options,
+    );
   }
 }
 
@@ -692,6 +745,17 @@ export class PublicCollectionRef<T extends JsonObject = JsonObject> {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  watch(onChange: (event: DbChangeEvent) => void, options: WatchOptions = {}): EventSource {
+    const qs = new URLSearchParams();
+    if (options.since !== undefined) qs.set("since", String(options.since));
+    const query = qs.toString();
+    return watchEvents(
+      this.client.url(`${this.path}/events${query ? `?${query}` : ""}`),
+      onChange,
+      options,
+    );
   }
 }
 

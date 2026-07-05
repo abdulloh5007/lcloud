@@ -154,6 +154,8 @@ def test_json_db_meta_exposes_machine_readable_limits(app_client: TestClient) ->
     assert body["access_rules"]["public_read_rate_limit"]["capacity"] == 120
     assert body["access_rules"]["public_write_rate_limit"]["capacity"] == 30
     assert "max_bytes" in body["access_rules"]["write_validator"]["fields"]
+    assert body["realtime"]["transport"] == "sse"
+    assert body["realtime"]["event"] == "lcloud.db.change"
 
 
 def test_json_db_isolated_per_user(app_client: TestClient) -> None:
@@ -231,6 +233,53 @@ def test_json_db_public_access_rules(app_client: TestClient) -> None:
     )
     assert public_write.status_code == 201, public_write.text
     assert public_write.json()["data"]["title"] == "Browser"
+
+
+def test_json_db_sse_events_once(app_client: TestClient) -> None:
+    _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "events"}).status_code == 201
+    created = app_client.post(
+        "/api/v1/db/events",
+        json={"id": "one", "data": {"title": "One"}},
+    )
+    assert created.status_code == 201, created.text
+
+    events = app_client.get("/api/v1/db/events/events?since=0&once=true")
+    assert events.status_code == 200, events.text
+    assert "text/event-stream" in events.headers["content-type"]
+    body = events.text
+    assert "event: lcloud.db.change" in body
+    assert '"doc_id":"one"' in body
+
+
+def test_json_db_public_sse_events_once(app_client: TestClient) -> None:
+    _login(app_client)
+    raw = app_client.post("/api/v1/keys", json={"label": "events-test"}).json()["raw"]
+    created = app_client.post("/api/v1/db/collections", json={"name": "public_events"})
+    assert created.status_code == 201, created.text
+    collection_id = created.json()["id"]
+    assert (
+        app_client.put(
+            "/api/v1/db/collections/public_events/rules",
+            headers={"Authorization": f"Bearer {raw}"},
+            json={"read": "public", "write": "owner"},
+        ).status_code
+        == 200
+    )
+    assert (
+        app_client.post(
+            "/api/v1/db/public_events",
+            headers={"Authorization": f"Bearer {raw}"},
+            json={"id": "visible", "data": {"title": "Visible"}},
+        ).status_code
+        == 201
+    )
+
+    app_client.cookies.clear()
+    events = app_client.get(f"/api/v1/public/db/{collection_id}/events?since=0&once=true")
+    assert events.status_code == 200, events.text
+    assert "event: lcloud.db.change" in events.text
+    assert '"doc_id":"visible"' in events.text
 
 
 def test_json_db_public_write_validator(app_client: TestClient) -> None:

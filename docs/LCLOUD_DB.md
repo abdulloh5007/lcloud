@@ -110,6 +110,7 @@ batch writes, upload size, auth, and rate limits.
 | Public read rate limit | 120 requests/minute/IP |
 | Public write rate limit | 30 requests/minute/IP |
 | Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
+| Realtime | Server-Sent Events over `json_operations`; cursor is operation `id` |
 | File list page size | `limit` default 50, max 500 |
 | Upload size | deployment setting `LC_MAX_FILE_BYTES`; read `media.max_upload_bytes` from `_meta` |
 | API keys | max 25 active keys per user |
@@ -280,6 +281,43 @@ Supported operators:
 
 Nested fields use dot paths, for example `profile.city`.
 
+### Realtime
+
+Owner stream:
+
+```bash
+curl -N "$BASE/users/events?since=0" \
+  -H "Authorization: Bearer $LCLOUD_API_KEY"
+```
+
+Public stream:
+
+```bash
+curl -N "https://your-lcloud-host/api/v1/public/db/123/events?since=0"
+```
+
+SSE event name:
+
+```text
+lcloud.db.change
+```
+
+Event data shape:
+
+```json
+{
+  "id": 123,
+  "collection_id": 1,
+  "doc_id": "alice",
+  "op": "patch",
+  "payload": {"data": {"online": true}},
+  "created_at": "2026-07-05T10:00:00+00:00"
+}
+```
+
+Use `since=<last_event_id>` to resume after reconnect. Add `once=true` for a
+finite response that returns currently available events and closes.
+
 ## JavaScript/TypeScript SDK
 
 Install from npm after publish:
@@ -326,6 +364,9 @@ await users.setValidator({
   allowed_fields: ["email", "message"],
 });
 const publicUsers = db.publicCollection<UserDoc>(rules.collection_id);
+const source = publicUsers.watch((event) => {
+  console.log(event.op, event.doc_id);
+});
 
 await users.insert(
   { name: "Alice", role: "admin", score: 10, profile: { city: "Tashkent" } },

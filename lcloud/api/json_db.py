@@ -8,14 +8,17 @@ worker can flush segments/snapshots to Telegram without changing the API.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +44,8 @@ MAX_VALIDATOR_BYTES = 1024 * 1024
 PUBLIC_READ_RATE_LIMIT = 120
 PUBLIC_WRITE_RATE_LIMIT = 30
 PUBLIC_RATE_WINDOW_SECONDS = 60
+EVENT_STREAM_POLL_SECONDS = 1.0
+EVENT_STREAM_BATCH_LIMIT = 100
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -227,6 +232,28 @@ def _serialize_document(row: JsonDocument) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+def _serialize_operation(row: JsonOperation) -> dict[str, Any]:
+    payload = json.loads(row.payload_json)
+    return {
+        "id": row.id,
+        "collection_id": row.collection_id,
+        "doc_id": row.doc_id,
+        "op": row.op,
+        "payload": payload,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _sse_frame(*, event: str, data: dict[str, Any], event_id: int | None = None) -> str:
+    lines: list[str] = []
+    if event_id is not None:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    for line in _json_dumps(data).splitlines():
+        lines.append(f"data: {line}")
+    return "\n".join(lines) + "\n\n"
 
 
 def _get_field(data: dict[str, Any], field_path: str) -> Any:
@@ -468,6 +495,64 @@ def _operation(
     )
 
 
+async def _stream_collection_events(
+    *,
+    collection_id: int,
+    request: Request,
+    user: Any | None,
+    since: int,
+    once: bool,
+) -> AsyncIterator[str]:
+    last_id = since
+    while True:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+            _require_collection_access(coll, user=user, action="read")
+            rows = (
+                await sess.execute(
+                    sa.select(JsonOperation)
+                    .where(
+                        JsonOperation.collection_id == collection_id,
+                        JsonOperation.id > last_id,
+                    )
+                    .order_by(JsonOperation.id.asc())
+                    .limit(EVENT_STREAM_BATCH_LIMIT)
+                )
+            ).scalars().all()
+
+        if rows:
+            for row in rows:
+                last_id = row.id
+                yield _sse_frame(
+                    event="lcloud.db.change",
+                    data=_serialize_operation(row),
+                    event_id=row.id,
+                )
+            if once:
+                return
+        elif once:
+            return
+        else:
+            yield ": keepalive\n\n"
+
+        if await request.is_disconnected():
+            return
+        await asyncio.sleep(EVENT_STREAM_POLL_SECONDS)
+
+
+def _event_stream_response(stream: AsyncIterator[str]) -> StreamingResponse:
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get(
     "/_meta",
     summary="LCloud DB capabilities and limits",
@@ -513,6 +598,16 @@ async def db_meta() -> dict[str, Any]:
             "max_writes": MAX_BATCH_WRITES,
             "operations": ["create", "set", "update", "delete"],
             "atomic": True,
+        },
+        "realtime": {
+            "transport": "sse",
+            "event": "lcloud.db.change",
+            "owner_path": "/api/v1/db/{collection}/events",
+            "public_path": "/api/v1/public/db/{collection_id}/events",
+            "cursor": "json_operations.id",
+            "query_params": ["since", "once"],
+            "poll_seconds": EVENT_STREAM_POLL_SECONDS,
+            "batch_limit": EVENT_STREAM_BATCH_LIMIT,
         },
         "access_rules": {
             "rules": list(ACCESS_RULES),
@@ -1037,6 +1132,33 @@ async def batch_documents(
 
 
 @router.get(
+    "/{collection}/events",
+    summary="Stream JSON DB collection changes as Server-Sent Events",
+)
+async def stream_collection_events(
+    request: Request,
+    user: CurrentUser,
+    collection: str = Path(..., min_length=1, max_length=64),
+    since: int = Query(default=0, ge=0),
+    once: bool = Query(default=False),
+) -> StreamingResponse:
+    name = _validate_collection_name(collection)
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_or_404(sess, user_id=user.id, name=name)
+        collection_id = coll.id
+    return _event_stream_response(
+        _stream_collection_events(
+            collection_id=collection_id,
+            request=request,
+            user=user,
+            since=since,
+            once=once,
+        )
+    )
+
+
+@router.get(
     "/{collection}/{doc_id}",
     summary="Get JSON document",
 )
@@ -1301,6 +1423,33 @@ async def public_query_documents(
         "limit": body.limit,
         "offset": body.offset,
     }
+
+
+@public_router.get(
+    "/{collection_id}/events",
+    summary="Stream public/read-access JSON DB changes as Server-Sent Events",
+)
+async def public_stream_collection_events(
+    collection_id: int,
+    request: Request,
+    user: OptionalCurrentUser,
+    since: int = Query(default=0, ge=0),
+    once: bool = Query(default=False),
+) -> StreamingResponse:
+    _enforce_public_rate(request, action="read")
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
+        _require_collection_access(coll, user=user, action="read")
+    return _event_stream_response(
+        _stream_collection_events(
+            collection_id=collection_id,
+            request=request,
+            user=user,
+            since=since,
+            once=once,
+        )
+    )
 
 
 @public_router.get(

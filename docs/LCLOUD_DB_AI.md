@@ -85,6 +85,7 @@ Current contract:
 | Public read rate limit | 120 requests/minute/IP |
 | Public write rate limit | 30 requests/minute/IP |
 | Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
+| Realtime | Server-Sent Events; cursor is `json_operations.id` |
 | API keys | max 25 active keys per user |
 | Upload size | read `meta.media.max_upload_bytes` |
 | V2 login rate limit | 10 challenge/verify requests per 5 minutes per IP |
@@ -180,6 +181,37 @@ Validator fields:
 | `max_fields` | Max number of top-level fields |
 | `required_fields` | Top-level fields that must exist |
 | `allowed_fields` | Reject top-level fields outside this list |
+
+## Realtime
+
+Use SDK watch helpers when running in a browser with EventSource:
+
+```ts
+const source = db.collection("posts").watch((event) => {
+  console.log(event.op, event.doc_id, event.payload);
+});
+
+source.close();
+```
+
+For public collections:
+
+```ts
+const publicPosts = db.publicCollection(collectionId);
+const source = publicPosts.watch((event) => {
+  console.log(event.id, event.op);
+});
+```
+
+REST/SSE fallback:
+
+```text
+GET /api/v1/db/{collection}/events?since=0
+GET /api/v1/public/db/{collection_id}/events?since=0
+```
+
+SSE event name is `lcloud.db.change`. Resume with `since=<last_event_id>`.
+Use `once=true` only for finite polling/tests.
 
 ## CRUD snippets
 
