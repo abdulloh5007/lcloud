@@ -303,7 +303,15 @@ async def _replay_operation(sess: Any, coll: JsonCollection, raw: dict[str, Any]
     elif op in {"create", "set", "patch", "delete"}:
         if not isinstance(doc_id, str):
             raise RestoreError(f"operation {operation_id} missing doc_id")
-        await _replay_document_operation(sess, coll, doc_id, op, payload, raw.get("created_at"))
+        await _replay_document_operation(
+            sess,
+            coll,
+            doc_id,
+            op,
+            payload,
+            raw.get("created_at"),
+            raw.get("owner_uid"),
+        )
     else:
         raise RestoreError(f"unsupported operation {operation_id}: {op}")
 
@@ -316,6 +324,7 @@ async def _replay_operation(sess: Any, coll: JsonCollection, raw: dict[str, Any]
                 id=operation_id,
                 collection_id=coll.id,
                 doc_id=doc_id if isinstance(doc_id, str) else None,
+                owner_uid=raw.get("owner_uid") if isinstance(raw.get("owner_uid"), str) else None,
                 op=op,
                 payload_json=_json_dumps(payload),
                 created_at=_parse_dt(raw.get("created_at")) or sa.func.now(),
@@ -332,6 +341,7 @@ async def _replay_document_operation(
     op: str,
     payload: dict[str, Any],
     created_at: Any,
+    owner_uid: Any,
 ) -> None:
     row = (
         await sess.execute(
@@ -350,6 +360,7 @@ async def _replay_document_operation(
             row = JsonDocument(
                 collection_id=coll.id,
                 doc_id=doc_id,
+                owner_uid=owner_uid if isinstance(owner_uid, str) else None,
                 data_json=_json_dumps(data),
                 version=1,
                 updated_at=now,
@@ -357,6 +368,8 @@ async def _replay_document_operation(
             )
             sess.add(row)
         else:
+            if row.owner_uid is None and isinstance(owner_uid, str):
+                row.owner_uid = owner_uid
             row.data_json = _json_dumps(data)
             row.version += 1
             row.updated_at = now

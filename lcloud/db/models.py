@@ -353,6 +353,60 @@ class JsonDbPublicKey(Base):
     )
 
 
+class AppUser(Base):
+    """End-user identity inside one LCloud DB project."""
+
+    __tablename__ = "app_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    uid: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="anonymous")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_owner_user_id",
+            "uid",
+            name="uq_app_users_project_uid",
+        ),
+    )
+
+
+class AppRefreshSession(Base):
+    """Hash-only, revocable refresh token for an app end user."""
+
+    __tablename__ = "app_refresh_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    app_user_id: Mapped[int] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class StoragePublicKey(Base):
     """Publishable storage key for browser/serverless media access.
 
@@ -447,6 +501,7 @@ class JsonDocument(Base):
         index=True,
     )
     doc_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner_uid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     data_json: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
@@ -480,6 +535,7 @@ class JsonOperation(Base):
         index=True,
     )
     doc_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    owner_uid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     op: Mapped[str] = mapped_column(String(16), nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

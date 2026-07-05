@@ -1,6 +1,6 @@
 {
   "name": "@lcloud/db",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "TypeScript client for LCloud DB JSON document collections.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,10 @@
     "./clients": {
       "types": "./dist/clients/index.d.ts",
       "import": "./dist/clients/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
     },
     "./errors": {
       "types": "./dist/errors.d.ts",
@@ -37,13 +41,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mramziddin1228-gif/LCloud.git",
+    "url": "git+https://github.com/abdulloh5007/lcloud.git",
     "directory": "sdk"
   },
   "bugs": {
-    "url": "https://github.com/mramziddin1228-gif/LCloud/issues"
+    "url": "https://github.com/abdulloh5007/lcloud/issues"
   },
-  "homepage": "https://github.com/mramziddin1228-gif/LCloud#readme",
+  "homepage": "https://github.com/abdulloh5007/lcloud#readme",
   "publishConfig": {
     "access": "public"
   },

@@ -63,6 +63,7 @@ This is the Supabase/Firebase-style mode for a plain static website:
 3. Set access rules:
    - public read site: `{ "read": "public", "write": "owner" }`
    - public form: `{ "read": "owner", "write": "public" }`
+   - private per-user data: `{ "read": "document_owner", "write": "document_owner" }`
 4. For public writes, set a validator with `max_bytes`, `max_fields`,
    `required_fields`, and `allowed_fields`.
 5. In frontend code use `createBrowserClient()` with `publishableKey`.
@@ -105,6 +106,23 @@ Do not add a local JSON database fallback for production. If LCloud is
 configured, it is the source of truth. Local JSON files are acceptable only for
 explicit offline mocks/tests.
 
+For private per-user documents, sign in anonymously once. The SDK restores the
+session after page reload and refreshes access tokens automatically:
+
+```ts
+if (!lcloud.auth) throw new Error("publishableKey is required");
+if (!lcloud.auth.currentUser) await lcloud.auth.signInAnonymously();
+
+const notes = lcloud.collection<{ text: string }>("notes");
+await notes.insert({ text: "Only this browser user can read this" });
+```
+
+The access JWT lasts 15 minutes. The revocable refresh token uses a sliding
+365-day lifetime, so an actively used app does not require periodic manual
+authentication. Public rules require no auth at all. Anonymous identity cannot
+be recovered after browser storage is cleared until account linking providers
+are added.
+
 Publishable DB key route shape:
 
 ```text
@@ -116,6 +134,15 @@ PUT    /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 PATCH  /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 DELETE /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 GET    /api/v1/public/db/key/{publishable_key}/{collection}/events
+```
+
+App auth route shape:
+
+```text
+POST   /api/v1/public/auth/key/{publishable_key}/anonymous
+POST   /api/v1/public/auth/key/{publishable_key}/refresh
+POST   /api/v1/public/auth/key/{publishable_key}/sign-out
+GET    /api/v1/public/auth/key/{publishable_key}/me
 ```
 
 Publishable storage key route shape:
@@ -247,7 +274,9 @@ batch writes, upload size, auth, and rate limits.
 | Batch writes | max 100 writes per request |
 | Batch operations | `create`, `set`, `update`, `delete` |
 | Batch atomicity | all writes commit together or none commit |
-| Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
+| Access rules | `owner`, `document_owner`, `authenticated`, `public`; default is `owner` |
+| App access JWT | 15 minutes; refreshed automatically by the SDK |
+| App refresh token | Revocable, sliding 365 days; stored by the browser SDK |
 | Public read rate limit | 120 requests/minute/IP |
 | Public write rate limit | 30 requests/minute/IP |
 | Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
@@ -318,7 +347,8 @@ Rules:
 | Rule | Meaning |
 | --- | --- |
 | `owner` | Only the collection owner can access |
-| `authenticated` | Any valid LCloud user session or API key can access |
+| `document_owner` | App user can create documents and access only rows carrying their immutable `owner_id` |
+| `authenticated` | Project app user, or an authenticated LCloud owner, can access |
 | `public` | No credentials required |
 
 Collections default to `{ "read": "owner", "write": "owner" }`. To use
@@ -674,12 +704,12 @@ together. Keep each batch at or below `meta.batch.max_writes`.
 
 ## Current limitations
 
-- No realtime subscriptions yet.
+- Realtime uses SSE rather than WebSocket subscriptions.
 - Query filtering is currently in the API process over materialized JSON rows.
 - No compound indexes exposed to users yet.
 - `PATCH` is shallow: it merges top-level fields only.
-- Access rules and write validators are collection-level only.
-- Telegram snapshot/segment flushing is planned but not active in the MVP.
+- Rules are predefined modes, not arbitrary Firebase-style expressions.
+- Anonymous identities cannot yet be linked to email/OAuth accounts.
 - SDK media uploads use the existing LCloud file API. Built-in client-side LC2
   signing helper is not bundled yet; advanced callers may pass LC2 fields
   manually.

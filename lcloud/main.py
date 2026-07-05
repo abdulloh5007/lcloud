@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from lcloud import __version__
 from lcloud.api import (
     api_keys_router,
+    app_auth_router,
     auth_router,
     auth_v2_router,
     clouds_files_router,
@@ -341,6 +342,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(auth_v2_router)
+    app.include_router(app_auth_router)
     app.include_router(api_keys_router)
     app.include_router(payments_public_router)
     app.include_router(payments_admin_router)

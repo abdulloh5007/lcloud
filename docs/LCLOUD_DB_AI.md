@@ -67,6 +67,24 @@ const posts = lcloud.collection<Post>("posts");
 const page = await posts.list({ limit: 20 });
 ```
 
+For private data belonging to each website user, configure
+`{ read: "document_owner", write: "document_owner" }`, then initialize an
+anonymous identity once:
+
+```ts
+if (!lcloud.auth) throw new Error("publishableKey is required");
+if (!lcloud.auth.currentUser) await lcloud.auth.signInAnonymously();
+
+const notes = lcloud.collection<Note>("notes");
+await notes.insert({ text: "private" });
+```
+
+Do not build a weekly login job. The SDK persists a revocable refresh token,
+automatically renews the 15-minute access JWT, and restores the session after a
+page reload. `public` collections do not require auth. Anonymous identities are
+not recoverable after browser storage is cleared; do not promise cross-device
+recovery until account linking is available.
+
 Use `VITE_LCLOUD_DB_KEY=lcpk_...`, not `LCLOUD_API_KEY`, in frontend env.
 Frontend env vars are public after build.
 
@@ -131,7 +149,9 @@ Current contract:
 | Query filters | max 20 `where` filters |
 | Query field path | max 128 chars; dot notation |
 | Batch writes | max 100 writes; atomic all-or-nothing |
-| Access rules | `owner`, `authenticated`, `public`; default read/write is `owner` |
+| Access rules | `owner`, `document_owner`, `authenticated`, `public`; default is `owner` |
+| App access JWT | 15 minutes; SDK refreshes automatically |
+| App refresh token | Revocable, sliding 365 days |
 | Public read rate limit | 120 requests/minute/IP |
 | Public write rate limit | 30 requests/minute/IP |
 | Public write validator | `max_bytes`, `max_fields`, `required_fields`, `allowed_fields` |
@@ -233,7 +253,8 @@ Rules:
 | Rule | Meaning |
 | --- | --- |
 | `owner` | Only collection owner can access |
-| `authenticated` | Any logged-in LCloud user/API key can access |
+| `document_owner` | Project app user can create and access only their documents |
+| `authenticated` | Project app user or authenticated LCloud owner can access |
 | `public` | No credentials required |
 
 Do not set `write: "public"` unless the app intentionally accepts anonymous

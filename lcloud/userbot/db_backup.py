@@ -283,6 +283,7 @@ async def _build_segment_file(
                     "updated_at": collection.updated_at.isoformat() if collection.updated_at else None,
                 },
                 "doc_id": operation.doc_id,
+                "owner_uid": operation.owner_uid,
                 "op": operation.op,
                 "payload": json.loads(operation.payload_json),
                 "created_at": operation.created_at.isoformat() if operation.created_at else None,

@@ -160,6 +160,40 @@ For public forms set `{ read: "owner", write: "public" }` plus a validator.
 Do not create a local JSON fallback unless the user explicitly asks for offline
 mock data; the remote LCloud public collection is the source of truth.
 
+### Per-user private data without a backend
+
+Use `document_owner` when every browser user must see and modify only their own
+documents:
+
+```ts
+await admin.ensureCollection("notes");
+await admin.collection("notes").setRules({
+  read: "document_owner",
+  write: "document_owner",
+});
+```
+
+In the browser, create an anonymous identity once:
+
+```ts
+if (!lcloud.auth) throw new Error("publishableKey is required");
+
+if (!lcloud.auth.currentUser) {
+  await lcloud.auth.signInAnonymously();
+}
+
+const note = await lcloud.collection("notes").insert({ text: "Private" });
+console.log(note.owner_id); // current app user's uid
+```
+
+The SDK persists the refresh session in browser storage. Access tokens expire
+after 15 minutes and are refreshed automatically. The revocable refresh token
+has a sliding 365-day lifetime, extended whenever it is used. There is no
+weekly owner login and public collections continue to work without auth.
+
+Do not treat an anonymous account as recoverable across cleared browser data or
+another device. Email/OAuth account linking is not implemented yet.
+
 ### Browser media uploads
 
 For files/photos/videos from a static frontend, create a publishable storage key
@@ -216,8 +250,9 @@ const lcloud = createBrowserClient({
 });
 ```
 
-Use this for static frontend/serverless apps. It sends no cookies and no API
-key, so it only works with collections whose rules allow public read/write.
+Use this for static frontend/serverless apps. It sends no owner cookie or secret
+API key. Public rules work anonymously; app-user JWTs enable `authenticated`
+and `document_owner` rules.
 
 ### `createPublicClient(options)`
 
@@ -258,7 +293,8 @@ Rules:
 | Rule | Meaning |
 | --- | --- |
 | `owner` | Only collection owner can access |
-| `authenticated` | Any logged-in LCloud user/API key can access |
+| `document_owner` | App user can create and access only documents with their `owner_id` |
+| `authenticated` | Project app user or authenticated LCloud owner can access |
 | `public` | No credentials required |
 
 Default is `{ read: "owner", write: "owner" }`.

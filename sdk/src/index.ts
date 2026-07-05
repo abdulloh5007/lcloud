@@ -2,6 +2,7 @@ import { LCloudBrowserClient, LCloudDbClient } from "./clients/index.js";
 import type { LCloudDbOptions, LCloudPublicClientOptions } from "./types.js";
 
 export * from "./clients/index.js";
+export * from "./auth.js";
 export * from "./errors.js";
 export * from "./refs/index.js";
 export * from "./types.js";

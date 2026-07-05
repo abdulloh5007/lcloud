@@ -24,6 +24,7 @@ def app_client(
     monkeypatch.setenv("LC_ADMIN_TG_ID", "0")
     monkeypatch.setenv("LC_COOKIE_SECURE", "false")
 
+    from lcloud.api import app_auth as app_auth_mod
     from lcloud.api import auth_v2 as auth_v2_mod
     from lcloud.api import json_db as json_db_mod
     from lcloud.config import get_settings
@@ -35,6 +36,7 @@ def app_client(
     base_mod._sessionmaker = None
     set_userbot_manager(None)
     auth_v2_mod._v2_rate.reset()
+    app_auth_mod.reset_app_auth_rate_limit()
     json_db_mod.reset_json_db_public_rate_limits()
 
     from lcloud.main import create_app
@@ -49,6 +51,7 @@ def app_client(
         base_mod._sessionmaker = None
         set_userbot_manager(None)
         auth_v2_mod._v2_rate.reset()
+        app_auth_mod.reset_app_auth_rate_limit()
         json_db_mod.reset_json_db_public_rate_limits()
 
 
@@ -150,7 +153,12 @@ def test_json_db_meta_exposes_machine_readable_limits(app_client: TestClient) ->
     assert body["batch"]["atomic"] is True
     assert body["media"]["max_upload_bytes"] >= 1
     assert body["auth"]["v2_login_rate_limit"]["window_seconds"] == 300
-    assert body["access_rules"]["rules"] == ["owner", "authenticated", "public"]
+    assert body["access_rules"]["rules"] == [
+        "owner",
+        "document_owner",
+        "authenticated",
+        "public",
+    ]
     assert body["access_rules"]["public_read_rate_limit"]["capacity"] == 120
     assert body["access_rules"]["public_write_rate_limit"]["capacity"] == 30
     assert "max_bytes" in body["access_rules"]["write_validator"]["fields"]
@@ -302,6 +310,102 @@ def test_json_db_publishable_key_public_browser_flow(app_client: TestClient) -> 
     )
     assert blocked.status_code == 404
 
+
+def test_app_auth_refresh_and_document_owner_rules(app_client: TestClient) -> None:
+    _login(app_client)
+    public_key = app_client.post(
+        "/api/v1/db/public-keys", json={"label": "app-auth"}
+    ).json()["key"]
+    assert app_client.post(
+        "/api/v1/db/collections", json={"name": "private_notes"}
+    ).status_code == 201
+    rules = app_client.put(
+        "/api/v1/db/collections/private_notes/rules",
+        json={"read": "document_owner", "write": "document_owner"},
+    )
+    assert rules.status_code == 200, rules.text
+    app_client.cookies.clear()
+
+    first = app_client.post(f"/api/v1/public/auth/key/{public_key}/anonymous")
+    assert first.status_code == 201, first.text
+    first_session = first.json()
+    first_headers = {"Authorization": f"Bearer {first_session['access_token']}"}
+    first_uid = first_session["user"]["uid"]
+
+    created = app_client.post(
+        f"/api/v1/public/db/key/{public_key}/private_notes",
+        headers=first_headers,
+        json={"id": "first", "data": {"text": "private"}},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["owner_id"] == first_uid
+
+    second = app_client.post(f"/api/v1/public/auth/key/{public_key}/anonymous").json()
+    second_headers = {"Authorization": f"Bearer {second['access_token']}"}
+    assert app_client.post(
+        f"/api/v1/public/db/key/{public_key}/private_notes",
+        headers=second_headers,
+        json={"id": "second", "data": {"text": "also private"}},
+    ).status_code == 201
+
+    first_list = app_client.get(
+        f"/api/v1/public/db/key/{public_key}/private_notes",
+        headers=first_headers,
+    )
+    assert first_list.status_code == 200, first_list.text
+    assert [item["id"] for item in first_list.json()["items"]] == ["first"]
+    forbidden = app_client.patch(
+        f"/api/v1/public/db/key/{public_key}/private_notes/second",
+        headers=first_headers,
+        json={"data": {"text": "stolen"}},
+    )
+    assert forbidden.status_code == 403
+
+    app_client.cookies.clear()
+    _login(app_client)
+    other_key = app_client.post(
+        "/api/v1/db/public-keys", json={"label": "other-project"}
+    ).json()["key"]
+    assert app_client.post(
+        "/api/v1/db/collections", json={"name": "members"}
+    ).status_code == 201
+    assert app_client.put(
+        "/api/v1/db/collections/members/rules",
+        json={"read": "authenticated", "write": "authenticated"},
+    ).status_code == 200
+    app_client.cookies.clear()
+    cross_project = app_client.post(
+        f"/api/v1/public/db/key/{other_key}/members",
+        headers=first_headers,
+        json={"id": "intruder", "data": {"name": "blocked"}},
+    )
+    assert cross_project.status_code == 403
+
+    refreshed = app_client.post(
+        f"/api/v1/public/auth/key/{public_key}/refresh",
+        json={"refresh_token": first_session["refresh_token"]},
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_body = refreshed.json()
+    assert refreshed_body["refresh_token"] == first_session["refresh_token"]
+    assert app_client.get(
+        f"/api/v1/public/auth/key/{public_key}/me",
+        headers={"Authorization": f"Bearer {refreshed_body['access_token']}"},
+    ).json()["uid"] == first_uid
+    reused = app_client.post(
+        f"/api/v1/public/auth/key/{public_key}/refresh",
+        json={"refresh_token": first_session["refresh_token"]},
+    )
+    assert reused.status_code == 200
+    signed_out = app_client.post(
+        f"/api/v1/public/auth/key/{public_key}/sign-out",
+        json={"refresh_token": first_session["refresh_token"]},
+    )
+    assert signed_out.status_code == 204
+    assert app_client.post(
+        f"/api/v1/public/auth/key/{public_key}/refresh",
+        json={"refresh_token": first_session["refresh_token"]},
+    ).status_code == 401
 
 def test_json_db_sse_events_once(app_client: TestClient) -> None:
     _login(app_client)

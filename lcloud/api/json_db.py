@@ -23,6 +23,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lcloud import __version__
+from lcloud.api.app_auth import (
+    ACCESS_TOKEN_TTL_SECONDS,
+    AUTH_RATE_LIMIT,
+    AUTH_RATE_WINDOW_SECONDS,
+    REFRESH_TOKEN_TTL_DAYS,
+    OptionalPublicPrincipal,
+    PublicPrincipal,
+)
 from lcloud.api.storage_public import (
     MAX_STORAGE_PUBLIC_KEYS_PER_USER,
     PUBLIC_STORAGE_RATE_WINDOW_SECONDS,
@@ -64,8 +72,8 @@ EVENT_STREAM_BATCH_LIMIT = 100
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 RESERVED_COLLECTIONS = {"collections"}
-AccessRule = Literal["owner", "authenticated", "public"]
-ACCESS_RULES = ("owner", "authenticated", "public")
+AccessRule = Literal["owner", "document_owner", "authenticated", "public"]
+ACCESS_RULES = ("owner", "document_owner", "authenticated", "public")
 DB_PUBLIC_KEY_PREFIX = "lcpk_"
 DB_PUBLIC_KEY_PREFIX_LEN = len(DB_PUBLIC_KEY_PREFIX) + 8
 DB_PUBLIC_KEY_ENTROPY_LEN = 32
@@ -268,6 +276,7 @@ def _serialize_document(row: JsonDocument) -> dict[str, Any]:
     return {
         "id": row.doc_id,
         "collection_id": row.collection_id,
+        "owner_id": row.owner_uid,
         "data": _json_loads(row.data_json),
         "version": row.version,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -281,6 +290,7 @@ def _serialize_operation(row: JsonOperation) -> dict[str, Any]:
         "id": row.id,
         "collection_id": row.collection_id,
         "doc_id": row.doc_id,
+        "owner_id": row.owner_uid,
         "op": row.op,
         "payload": payload,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -497,13 +507,28 @@ def _can_access_collection(
     *,
     user: Any | None,
     action: Literal["read", "write"],
+    document: JsonDocument | None = None,
 ) -> bool:
-    if user is not None and coll.owner_user_id == user.id:
+    owner_user = user.owner_user if isinstance(user, PublicPrincipal) else user
+    app_user = user.app_user if isinstance(user, PublicPrincipal) else None
+    if owner_user is not None and coll.owner_user_id == owner_user.id:
         return True
     rule = coll.read_rule if action == "read" else coll.write_rule
     if rule == "public":
         return True
-    return bool(rule == "authenticated" and user is not None)
+    if rule == "authenticated":
+        return bool(
+            owner_user is not None
+            or (
+                app_user is not None
+                and app_user.project_owner_user_id == coll.owner_user_id
+            )
+        )
+    if rule == "document_owner":
+        if app_user is None or app_user.project_owner_user_id != coll.owner_user_id:
+            return False
+        return document is None or document.owner_uid == app_user.uid
+    return False
 
 
 def _require_collection_access(
@@ -511,8 +536,9 @@ def _require_collection_access(
     *,
     user: Any | None,
     action: Literal["read", "write"],
+    document: JsonDocument | None = None,
 ) -> None:
-    if not _can_access_collection(coll, user=user, action=action):
+    if not _can_access_collection(coll, user=user, action=action, document=document):
         raise HTTPException(403, detail={"reason": "access_denied"})
 
 
@@ -557,12 +583,14 @@ def _operation(
     doc_id: str | None,
     op: str,
     payload: dict[str, Any],
+    owner_uid: str | None = None,
 ) -> JsonOperation:
     return JsonOperation(
         collection_id=collection_id,
         doc_id=doc_id,
         op=op,
         payload_json=_json_dumps(payload),
+        owner_uid=owner_uid,
     )
 
 
@@ -580,15 +608,17 @@ async def _stream_collection_events(
         async with sm() as sess:
             coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
             _require_collection_access(coll, user=user, action="read")
+            query = sa.select(JsonOperation).where(
+                JsonOperation.collection_id == collection_id,
+                JsonOperation.id > last_id,
+            )
+            if coll.read_rule == "document_owner" and isinstance(user, PublicPrincipal):
+                app_user = user.app_user
+                if app_user is not None:
+                    query = query.where(JsonOperation.owner_uid == app_user.uid)
             rows = (
                 await sess.execute(
-                    sa.select(JsonOperation)
-                    .where(
-                        JsonOperation.collection_id == collection_id,
-                        JsonOperation.id > last_id,
-                    )
-                    .order_by(JsonOperation.id.asc())
-                    .limit(EVENT_STREAM_BATCH_LIMIT)
+                    query.order_by(JsonOperation.id.asc()).limit(EVENT_STREAM_BATCH_LIMIT)
                 )
             ).scalars().all()
 
@@ -632,7 +662,7 @@ async def public_key_list_documents(
     publishable_key: str,
     collection: str,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
     limit: int = Query(default=50, ge=1, le=MAX_DOCUMENT_LIST_LIMIT),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
@@ -648,6 +678,8 @@ async def public_key_list_documents(
             JsonDocument.collection_id == coll.id,
             JsonDocument.deleted_at.is_(None),
         )
+        if coll.read_rule == "document_owner" and user.app_user is not None:
+            base = base.where(JsonDocument.owner_uid == user.app_user.uid)
         total = (
             await sess.execute(sa.select(sa.func.count()).select_from(base.subquery()))
         ).scalar_one()
@@ -676,7 +708,7 @@ async def public_key_create_document(
     collection: str,
     body: CreateDocIn,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> dict[str, Any]:
     _enforce_public_rate(request, action="write")
     name = _validate_collection_name(collection)
@@ -697,12 +729,14 @@ async def public_key_create_document(
             row = JsonDocument(
                 collection_id=coll.id,
                 doc_id=doc_id,
+                owner_uid=user.app_user.uid if user.app_user else None,
                 data_json=_json_dumps(body.data),
                 version=1,
                 updated_at=now,
             )
             sess.add(row)
         else:
+            _require_collection_access(coll, user=user, action="write", document=existing)
             row = existing
             row.data_json = _json_dumps(body.data)
             row.version += 1
@@ -710,7 +744,15 @@ async def public_key_create_document(
             row.deleted_at = None
         coll.updated_at = now
         await sess.flush()
-        sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
+        sess.add(
+            _operation(
+                coll.id,
+                doc_id,
+                "create",
+                {"data": body.data},
+                owner_uid=row.owner_uid,
+            )
+        )
         await sess.commit()
         await sess.refresh(row)
         return _serialize_document(row)
@@ -725,7 +767,7 @@ async def public_key_query_documents(
     collection: str,
     body: QueryIn,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> dict[str, Any]:
     _enforce_public_rate(request, action="read")
     name = _validate_collection_name(collection)
@@ -735,14 +777,15 @@ async def public_key_query_documents(
             sess, key=publishable_key, name=name
         )
         _require_collection_access(coll, user=user, action="read")
+        query = sa.select(JsonDocument).where(
+            JsonDocument.collection_id == coll.id,
+            JsonDocument.deleted_at.is_(None),
+        )
+        if coll.read_rule == "document_owner" and user.app_user is not None:
+            query = query.where(JsonDocument.owner_uid == user.app_user.uid)
         rows = (
             await sess.execute(
-                sa.select(JsonDocument)
-                .where(
-                    JsonDocument.collection_id == coll.id,
-                    JsonDocument.deleted_at.is_(None),
-                )
-                .order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
+                query.order_by(JsonDocument.updated_at.desc(), JsonDocument.id.desc())
             )
         ).scalars().all()
 
@@ -767,6 +810,7 @@ async def public_key_query_documents(
             {
                 "id": row.doc_id,
                 "collection_id": row.collection_id,
+                "owner_id": row.owner_uid,
                 "data": data,
                 "version": row.version,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -788,7 +832,7 @@ async def public_key_stream_collection_events(
     publishable_key: str,
     collection: str,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
     since: int = Query(default=0, ge=0),
     once: bool = Query(default=False),
 ) -> StreamingResponse:
@@ -821,7 +865,7 @@ async def public_key_get_document(
     collection: str,
     doc_id: str,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> dict[str, Any]:
     _enforce_public_rate(request, action="read")
     name = _validate_collection_name(collection)
@@ -831,8 +875,8 @@ async def public_key_get_document(
         coll = await _get_collection_by_public_key_or_404(
             sess, key=publishable_key, name=name
         )
-        _require_collection_access(coll, user=user, action="read")
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        _require_collection_access(coll, user=user, action="read", document=row)
     return _serialize_document(row)
 
 
@@ -846,7 +890,7 @@ async def public_key_set_document(
     doc_id: str,
     body: SetDocIn,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> dict[str, Any]:
     _enforce_public_rate(request, action="write")
     name = _validate_collection_name(collection)
@@ -864,6 +908,7 @@ async def public_key_set_document(
             row = JsonDocument(
                 collection_id=coll.id,
                 doc_id=doc_id,
+                owner_uid=user.app_user.uid if user.app_user else None,
                 data_json=_json_dumps(body.data),
                 version=1,
                 updated_at=now,
@@ -872,13 +917,22 @@ async def public_key_set_document(
             sess.add(row)
             op = "create"
         else:
+            _require_collection_access(coll, user=user, action="write", document=row)
             row.data_json = _json_dumps(body.data)
             row.version += 1
             row.updated_at = now
             row.deleted_at = None
             op = "set"
         coll.updated_at = now
-        sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
+        sess.add(
+            _operation(
+                coll.id,
+                doc_id,
+                op,
+                {"data": body.data},
+                owner_uid=row.owner_uid,
+            )
+        )
         await sess.commit()
         await sess.refresh(row)
         return _serialize_document(row)
@@ -894,7 +948,7 @@ async def public_key_patch_document(
     doc_id: str,
     body: PatchDocIn,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> dict[str, Any]:
     _enforce_public_rate(request, action="write")
     name = _validate_collection_name(collection)
@@ -907,6 +961,7 @@ async def public_key_patch_document(
         )
         _require_collection_access(coll, user=user, action="write")
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        _require_collection_access(coll, user=user, action="write", document=row)
         data = _json_loads(row.data_json)
         data.update(body.data)
         _validate_public_write(coll, data)
@@ -914,7 +969,15 @@ async def public_key_patch_document(
         row.version += 1
         row.updated_at = now
         coll.updated_at = now
-        sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
+        sess.add(
+            _operation(
+                coll.id,
+                doc_id,
+                "patch",
+                {"data": body.data},
+                owner_uid=row.owner_uid,
+            )
+        )
         await sess.commit()
         await sess.refresh(row)
         return _serialize_document(row)
@@ -931,7 +994,7 @@ async def public_key_delete_document(
     collection: str,
     doc_id: str,
     request: Request,
-    user: OptionalCurrentUser,
+    user: OptionalPublicPrincipal,
 ) -> Response:
     _enforce_public_rate(request, action="write")
     name = _validate_collection_name(collection)
@@ -944,11 +1007,12 @@ async def public_key_delete_document(
         )
         _require_collection_access(coll, user=user, action="write")
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
+        _require_collection_access(coll, user=user, action="write", document=row)
         row.deleted_at = now
         row.version += 1
         row.updated_at = now
         coll.updated_at = now
-        sess.add(_operation(coll.id, doc_id, "delete", {}))
+        sess.add(_operation(coll.id, doc_id, "delete", {}, owner_uid=row.owner_uid))
         await sess.commit()
     return Response(status_code=204)
 
@@ -1064,9 +1128,21 @@ async def db_meta() -> dict[str, Any]:
             },
         },
         "auth": {
-            "methods": ["lc_user_session_cookie", "bearer_api_key"],
+            "methods": [
+                "lc_user_session_cookie",
+                "bearer_api_key",
+                "anonymous_app_user",
+            ],
             "max_active_api_keys_per_user": MAX_API_KEYS_PER_USER,
             "api_keys_safe_for_public_browser": False,
+            "app_access_token_ttl_seconds": ACCESS_TOKEN_TTL_SECONDS,
+            "app_refresh_token_sliding_ttl_days": REFRESH_TOKEN_TTL_DAYS,
+            "app_auth_path": "/api/v1/public/auth/key/{publishable_key}",
+            "app_auth_rate_limit": {
+                "capacity": AUTH_RATE_LIMIT,
+                "window_seconds": AUTH_RATE_WINDOW_SECONDS,
+                "key": "ip",
+            },
             "v2_login_rate_limit": {
                 "capacity": 10,
                 "window_seconds": 300,
@@ -1095,7 +1171,7 @@ async def db_meta() -> dict[str, Any]:
             "joins",
             "server_side_sql",
             "realtime_subscriptions",
-            "public_document_rules",
+            "custom_rule_expressions",
             "user_defined_indexes",
             "deep_patch_merge",
         ],

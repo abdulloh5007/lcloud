@@ -36,7 +36,12 @@ import { Button } from "./ui/Button";
 const PAGE_LIMIT = 50;
 const EMPTY_DOC = "{\n  \n}";
 const EMPTY_VALIDATOR = "{\n  \"max_bytes\": 102400,\n  \"max_fields\": 20,\n  \"required_fields\": [],\n  \"allowed_fields\": []\n}";
-const RULES: JsonAccessRule[] = ["owner", "authenticated", "public"];
+const RULES: Array<{ value: JsonAccessRule; label: string }> = [
+  { value: "owner", label: "Project owner" },
+  { value: "document_owner", label: "Document owner" },
+  { value: "authenticated", label: "Signed in" },
+  { value: "public", label: "Public" },
+];
 const OPS: JsonWhereOp[] = ["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"];
 
 type WriteMode = "create" | "set" | "patch";
@@ -1399,8 +1404,8 @@ function RuleSelect({
         className="mt-1 h-10 w-full rounded-lg border border-neutral-200 bg-panel px-2 text-sm dark:border-neutral-700 dark:bg-panel-dark"
       >
         {RULES.map((rule) => (
-          <option key={rule} value={rule}>
-            {rule}
+          <option key={rule.value} value={rule.value}>
+            {rule.label}
           </option>
         ))}
       </select>

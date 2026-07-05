@@ -18,7 +18,7 @@ export type WhereOp =
   | "contains"
   | "startsWith";
 
-export type AccessRule = "owner" | "authenticated" | "public";
+export type AccessRule = "owner" | "document_owner" | "authenticated" | "public";
 
 export interface LCloudDbOptions {
   endpoint: string;
@@ -29,6 +29,8 @@ export interface LCloudDbOptions {
    * Use "omit" for public, browser-only apps hosted on another origin.
    */
   credentials?: RequestCredentials;
+  /** @internal Used by the browser auth client. */
+  accessToken?: () => Promise<string | null>;
 }
 
 export interface LCloudPublicClientOptions {
@@ -36,6 +38,35 @@ export interface LCloudPublicClientOptions {
   publishableKey?: string;
   storageKey?: string;
   fetch?: typeof fetch;
+  authStorage?: AuthStorage;
+}
+
+export interface AuthStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+export interface AppUser {
+  uid: string;
+  provider: string;
+  is_anonymous: boolean;
+}
+
+export interface AppSession {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  token_type: "Bearer";
+  user: AppUser;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  token_type: "Bearer";
+  user: AppUser;
 }
 
 export interface CollectionRow {
@@ -109,6 +140,7 @@ export interface FileRow {
 export interface DocumentRow<T extends JsonObject = JsonObject> {
   id: string;
   collection_id: number;
+  owner_id: string | null;
   data: T;
   version: number;
   created_at: string | null;
@@ -291,6 +323,14 @@ export interface LCloudDbMeta {
     methods: string[];
     max_active_api_keys_per_user: number;
     api_keys_safe_for_public_browser: boolean;
+    app_access_token_ttl_seconds?: number;
+    app_refresh_token_sliding_ttl_days?: number;
+    app_auth_path?: string;
+    app_auth_rate_limit?: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
     v2_login_rate_limit: {
       capacity: number;
       window_seconds: number;

@@ -68,7 +68,11 @@ export interface ApiErrorBody {
   detail?: { reason?: string; [k: string]: unknown } | string;
 }
 
-export type JsonAccessRule = "owner" | "authenticated" | "public";
+export type JsonAccessRule =
+  | "owner"
+  | "document_owner"
+  | "authenticated"
+  | "public";
 export type JsonWhereOp =
   | "=="
   | "!="

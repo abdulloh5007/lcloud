@@ -1,4 +1,5 @@
 import { LCloudDbClient } from "./db-client.js";
+import { LCloudAuth } from "../auth.js";
 import { PublicKeyCollectionRef } from "../refs/collections.js";
 import { PublicStorageRef } from "../refs/storage.js";
 import type {
@@ -8,12 +9,20 @@ import type {
 } from "../types.js";
 
 export class LCloudBrowserClient {
+  readonly auth?: LCloudAuth;
   private readonly client: LCloudDbClient;
   private readonly publishableKey?: string;
   private readonly storageKey?: string;
 
   constructor(options: LCloudPublicClientOptions) {
-    this.client = new LCloudDbClient({ ...options, credentials: "omit" });
+    this.auth = options.publishableKey
+      ? new LCloudAuth({ ...options, publishableKey: options.publishableKey })
+      : undefined;
+    this.client = new LCloudDbClient({
+      ...options,
+      credentials: "omit",
+      accessToken: () => this.auth?.getAccessToken() ?? Promise.resolve(null),
+    });
     this.publishableKey = options.publishableKey;
     this.storageKey = options.storageKey;
   }

@@ -1,6 +1,7 @@
 """API package: routers."""
 
 from lcloud.api.api_keys import router as api_keys_router
+from lcloud.api.app_auth import router as app_auth_router
 from lcloud.api.auth import router as auth_router
 from lcloud.api.auth_v2 import router as auth_v2_router
 from lcloud.api.clouds import router as clouds_router
@@ -33,6 +34,7 @@ from lcloud.api.versions import router as versions_router
 
 __all__ = [
     "api_keys_router",
+    "app_auth_router",
     "auth_router",
     "auth_v2_router",
     "clouds_files_router",
