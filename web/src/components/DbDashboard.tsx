@@ -11,19 +11,21 @@ import {
   Globe2,
   KeyRound,
   Plus,
+  UploadCloud,
   RefreshCw,
   Save,
   Search,
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, jsonDb } from "@/api/client";
+import { ApiError, clouds, jsonDb } from "@/api/client";
 import type {
   JsonAccessRule,
   JsonCollectionRow,
   JsonDbEvent,
   JsonDbPublicKeyRow,
   JsonDocumentRow,
+  JsonStoragePublicKeyRow,
   JsonQueryInput,
   JsonWhereOp,
   JsonWriteValidator,
@@ -112,6 +114,13 @@ export function DbDashboard() {
   const [copiedPath, setCopiedPath] = useState(false);
   const [activePage, setActivePage] = useState<DbPage>("documents");
   const [newPublicKeyLabel, setNewPublicKeyLabel] = useState("");
+  const [newStorageKeyLabel, setNewStorageKeyLabel] = useState("");
+  const [selectedStorageCloudId, setSelectedStorageCloudId] = useState<string>("");
+  const [storageMaxBytes, setStorageMaxBytes] = useState("10485760");
+  const [storageAllowUpload, setStorageAllowUpload] = useState(true);
+  const [storageAllowList, setStorageAllowList] = useState(true);
+  const [storageAllowDownload, setStorageAllowDownload] = useState(true);
+  const [storageAllowDelete, setStorageAllowDelete] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const collectionsQ = useQuery({
@@ -174,6 +183,16 @@ export function DbDashboard() {
   const publicKeysQ = useQuery({
     queryKey: ["json-db", "public-keys"],
     queryFn: () => jsonDb.listPublicKeys(),
+  });
+
+  const storageKeysQ = useQuery({
+    queryKey: ["json-db", "storage-public-keys"],
+    queryFn: () => jsonDb.listStorageKeys(),
+  });
+
+  const cloudsQ = useQuery({
+    queryKey: ["clouds"],
+    queryFn: () => clouds.list(),
   });
 
   useEffect(() => {
@@ -327,6 +346,38 @@ export function DbDashboard() {
     mutationFn: (id: number) => jsonDb.revokePublicKey(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["json-db", "public-keys"] });
+    },
+  });
+
+  const createStorageKey = useMutation({
+    mutationFn: () => {
+      const cloudId = Number(selectedStorageCloudId);
+      if (!cloudId) throw new Error("Select a cloud for media storage.");
+      const maxBytes = storageMaxBytes.trim() ? Number(storageMaxBytes) : null;
+      if (maxBytes !== null && (!Number.isFinite(maxBytes) || maxBytes <= 0)) {
+        throw new Error("Max file bytes must be a positive number.");
+      }
+      return jsonDb.createStorageKey({
+        cloud_id: cloudId,
+        label: newStorageKeyLabel.trim(),
+        allow_upload: storageAllowUpload,
+        allow_list: storageAllowList,
+        allow_download: storageAllowDownload,
+        allow_delete: storageAllowDelete,
+        max_file_bytes: maxBytes,
+      });
+    },
+    onSuccess: (row) => {
+      setNewStorageKeyLabel("");
+      setCopiedKey(row.key);
+      void qc.invalidateQueries({ queryKey: ["json-db", "storage-public-keys"] });
+    },
+  });
+
+  const revokeStorageKey = useMutation({
+    mutationFn: (id: number) => jsonDb.revokeStorageKey(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["json-db", "storage-public-keys"] });
     },
   });
 
@@ -991,6 +1042,107 @@ await db.collection("posts").list({ limit: 20 });`}
                     />
                   ))}
                 </div>
+
+                <div className="mt-6 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+                  <div className="mb-3 flex items-center gap-2">
+                    <UploadCloud size={15} className="text-neutral-400" />
+                    <div>
+                      <h2 className="text-sm font-semibold">Publishable storage keys</h2>
+                      <p className="text-xs text-neutral-500">
+                        For browser media uploads. Scoped to one cloud with explicit limits.
+                      </p>
+                    </div>
+                  </div>
+                  <form
+                    className="grid gap-2 md:grid-cols-[1fr_1fr_auto]"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      createStorageKey.mutate();
+                    }}
+                  >
+                    <select
+                      value={selectedStorageCloudId}
+                      onChange={(e) => setSelectedStorageCloudId(e.target.value)}
+                      className="rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
+                    >
+                      <option value="">Select media cloud</option>
+                      {cloudsQ.data?.map((cloud) => (
+                        <option key={cloud.id} value={cloud.id}>
+                          {cloud.name} #{cloud.id}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      value={newStorageKeyLabel}
+                      onChange={(e) => setNewStorageKeyLabel(e.target.value)}
+                      placeholder="website media"
+                      maxLength={64}
+                      className="rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
+                    />
+                    <Button type="submit" size="sm" loading={createStorageKey.isPending}>
+                      <Plus size={14} />
+                      Create storage key
+                    </Button>
+                    <input
+                      value={storageMaxBytes}
+                      onChange={(e) => setStorageMaxBytes(e.target.value)}
+                      inputMode="numeric"
+                      placeholder="max bytes"
+                      className="rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
+                    />
+                    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-bg px-3 py-2 text-xs dark:bg-bg-dark md:col-span-2">
+                      <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowUpload} onChange={(e) => setStorageAllowUpload(e.target.checked)} /> upload</label>
+                      <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowList} onChange={(e) => setStorageAllowList(e.target.checked)} /> list</label>
+                      <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowDownload} onChange={(e) => setStorageAllowDownload(e.target.checked)} /> download</label>
+                      <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowDelete} onChange={(e) => setStorageAllowDelete(e.target.checked)} /> delete</label>
+                    </div>
+                  </form>
+                  {createStorageKey.isError && (
+                    <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+                      {errorText(createStorageKey.error)}
+                    </div>
+                  )}
+                  <div className="mt-3 rounded-lg bg-bg p-3 text-xs text-neutral-600 dark:bg-bg-dark dark:text-neutral-300">
+                    <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                      Media frontend usage
+                    </div>
+                    <pre className="mt-2 overflow-x-auto whitespace-pre rounded-md bg-neutral-950 p-3 font-mono text-[11px] leading-5 text-neutral-100">
+{`VITE_LCLOUD_STORAGE_KEY=lstore_...
+
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+  storageKey: import.meta.env.VITE_LCLOUD_STORAGE_KEY,
+});
+const file = await lcloud.storage().upload(input.files[0]);
+await lcloud.collection("posts").insert({ file_id: file.id, url: lcloud.storage().downloadUrl(file.id) });`}
+                    </pre>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {storageKeysQ.isLoading && <div className="text-sm text-neutral-500">…</div>}
+                    {storageKeysQ.data?.length === 0 && (
+                      <div className="rounded-lg bg-bg px-3 py-6 text-center text-sm text-neutral-400 dark:bg-bg-dark">
+                        No publishable storage keys yet.
+                      </div>
+                    )}
+                    {storageKeysQ.data?.map((row) => (
+                      <StorageKeyRow
+                        key={row.id}
+                        row={row}
+                        cloudName={cloudsQ.data?.find((cloud) => cloud.id === row.cloud_id)?.name}
+                        onCopy={() => {
+                          void navigator.clipboard.writeText(row.key);
+                          setCopiedKey(row.key);
+                        }}
+                        onRevoke={() => {
+                          if (window.confirm(`Revoke ${row.prefix}…?`)) {
+                            revokeStorageKey.mutate(row.id);
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
               </section>
 
               <section
@@ -1119,6 +1271,72 @@ function PublicKeyRow({
           onClick={onRevoke}
           className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 transition-[background-color,color,scale] duration-150 ease-out hover:bg-red-50 hover:text-red-600 active:scale-[0.96] dark:hover:bg-red-950/30"
           aria-label="Revoke publishable key"
+          title="Revoke"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StorageKeyRow({
+  row,
+  cloudName,
+  onCopy,
+  onRevoke,
+}: {
+  row: JsonStoragePublicKeyRow;
+  cloudName?: string;
+  onCopy: () => void;
+  onRevoke: () => void;
+}) {
+  const revoked = row.revoked_at !== null;
+  const permissions = [
+    row.allow_upload && "upload",
+    row.allow_list && "list",
+    row.allow_download && "download",
+    row.allow_delete && "delete",
+  ].filter(Boolean).join(" / ");
+  return (
+    <div
+      className={classNames(
+        "flex items-center gap-3 rounded-lg bg-bg px-3 py-2 text-sm dark:bg-bg-dark",
+        revoked && "opacity-50",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <code className="truncate font-mono">{row.key}</code>
+          {revoked && (
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+              revoked
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-neutral-500">
+          {row.label && <span>{row.label}</span>}
+          <span>{cloudName ?? `cloud #${row.cloud_id}`}</span>
+          <span>{permissions}</span>
+          {row.max_file_bytes && <span className="tabular-nums">max {row.max_file_bytes} bytes</span>}
+          <span className="tabular-nums">created {formatDate(row.created_at)}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 transition-[background-color,color,scale] duration-150 ease-out hover:bg-neutral-100 hover:text-blue-600 active:scale-[0.96] dark:hover:bg-neutral-800"
+        aria-label="Copy storage key"
+        title="Copy"
+      >
+        <Copy size={14} />
+      </button>
+      {!revoked && (
+        <button
+          type="button"
+          onClick={onRevoke}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 transition-[background-color,color,scale] duration-150 ease-out hover:bg-red-50 hover:text-red-600 active:scale-[0.96] dark:hover:bg-red-950/30"
+          aria-label="Revoke storage key"
           title="Revoke"
         >
           <Trash2 size={14} />

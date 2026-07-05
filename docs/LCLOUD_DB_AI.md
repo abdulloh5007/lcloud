@@ -538,3 +538,33 @@ Use top-level fields for common filters:
 ```
 
 Avoid hiding filter fields deep inside large nested objects unless needed.
+
+
+### Browser media uploads
+
+For files/photos/videos from a static frontend, create a publishable storage key
+(`lstore_...`) for one cloud in DB Console -> Keys or trusted server code. Do
+not use `LCLOUD_API_KEY` in browser code for media.
+
+```env
+VITE_LCLOUD_STORAGE_KEY=lstore_...
+```
+
+```ts
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+  storageKey: import.meta.env.VITE_LCLOUD_STORAGE_KEY,
+});
+
+const uploaded = await lcloud.storage().upload(file, { name: file.name });
+await lcloud.collection("posts").insert({
+  title,
+  file_id: uploaded.id,
+  file_url: lcloud.storage().downloadUrl(uploaded.id),
+});
+```
+
+Storage keys are scoped to one cloud and have explicit permissions
+(`upload`, `list`, `download`, `delete`) plus `max_file_bytes`. Public storage
+writes are rate-limited per IP.

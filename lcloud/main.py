@@ -42,8 +42,10 @@ from lcloud.api import (
     pin_recovery_router,
     public_json_db_router,
     public_share_router,
+    public_storage_router,
     search_router,
     shares_router,
+    storage_public_keys_router,
     tags_router,
     v2_clouds_files_router,
     v2_clouds_router,
@@ -345,6 +347,8 @@ def create_app() -> FastAPI:
     app.include_router(v2_files_router)
     app.include_router(json_db_router)
     app.include_router(public_json_db_router)
+    app.include_router(storage_public_keys_router)
+    app.include_router(public_storage_router)
     app.include_router(versions_router)
     app.include_router(shares_router)
     app.include_router(public_share_router)

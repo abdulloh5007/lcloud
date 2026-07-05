@@ -106,6 +106,31 @@ export interface JsonDbPublicKeyRow {
   revoked_at: string | null;
 }
 
+export interface JsonStoragePublicKeyRow {
+  id: number;
+  cloud_id: number;
+  key: string;
+  prefix: string;
+  label: string;
+  allow_upload: boolean;
+  allow_list: boolean;
+  allow_download: boolean;
+  allow_delete: boolean;
+  max_file_bytes: number | null;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreateStoragePublicKeyInput {
+  cloud_id: number;
+  label?: string;
+  allow_upload?: boolean;
+  allow_list?: boolean;
+  allow_download?: boolean;
+  allow_delete?: boolean;
+  max_file_bytes?: number | null;
+}
+
 export interface JsonDocumentRow {
   id: string;
   collection_id: number;

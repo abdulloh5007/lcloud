@@ -105,7 +105,7 @@ Do not add a local JSON database fallback for production. If LCloud is
 configured, it is the source of truth. Local JSON files are acceptable only for
 explicit offline mocks/tests.
 
-Publishable key route shape:
+Publishable DB key route shape:
 
 ```text
 GET    /api/v1/public/db/key/{publishable_key}/{collection}
@@ -116,6 +116,15 @@ PUT    /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 PATCH  /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 DELETE /api/v1/public/db/key/{publishable_key}/{collection}/{doc_id}
 GET    /api/v1/public/db/key/{publishable_key}/{collection}/events
+```
+
+Publishable storage key route shape:
+
+```text
+GET    /api/v1/public/storage/key/{storage_key}/files
+POST   /api/v1/public/storage/key/{storage_key}/files
+GET    /api/v1/public/storage/key/{storage_key}/files/{file_id}/download
+DELETE /api/v1/public/storage/key/{storage_key}/files/{file_id}
 ```
 
 ## Naming rules
@@ -635,3 +644,33 @@ together. Keep each batch at or below `meta.batch.max_writes`.
 4. Realtime change stream over WebSocket/SSE.
 5. Document-level validators and per-public-route rate limits.
 6. Admin dashboard for collections/documents.
+
+
+### Browser media uploads
+
+For files/photos/videos from a static frontend, create a publishable storage key
+(`lstore_...`) for one cloud in DB Console -> Keys or trusted server code. Do
+not use `LCLOUD_API_KEY` in browser code for media.
+
+```env
+VITE_LCLOUD_STORAGE_KEY=lstore_...
+```
+
+```ts
+const lcloud = createBrowserClient({
+  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
+  storageKey: import.meta.env.VITE_LCLOUD_STORAGE_KEY,
+});
+
+const uploaded = await lcloud.storage().upload(file, { name: file.name });
+await lcloud.collection("posts").insert({
+  title,
+  file_id: uploaded.id,
+  file_url: lcloud.storage().downloadUrl(uploaded.id),
+});
+```
+
+Storage keys are scoped to one cloud and have explicit permissions
+(`upload`, `list`, `download`, `delete`) plus `max_file_bytes`. Public storage
+writes are rate-limited per IP.

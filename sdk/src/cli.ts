@@ -91,6 +91,11 @@ async function doctor(options: Flags): Promise<void> {
   const endpoint = stringFlag(options.endpoint) ?? env("LCLOUD_ENDPOINT") ?? env("VITE_LCLOUD_ENDPOINT");
   const publishableKey =
     stringFlag(options.key) ?? env("LCLOUD_DB_KEY") ?? env("VITE_LCLOUD_DB_KEY");
+  const storageKey =
+    stringFlag(options["storage-key"]) ??
+    stringFlag(options.storage) ??
+    env("LCLOUD_STORAGE_KEY") ??
+    env("VITE_LCLOUD_STORAGE_KEY");
   const collection =
     stringFlag(options.collection) ?? env("LCLOUD_COLLECTION") ?? env("VITE_LCLOUD_COLLECTION");
 
@@ -157,6 +162,24 @@ async function doctor(options: Flags): Promise<void> {
     warn("Skip collection check. Provide --key and --collection to verify browser access.");
   }
 
+  if (storageKey) {
+    if (!storageKey.startsWith("lstore_")) {
+      fail("Storage key must start with lstore_. Do not use lc- owner API keys in browser media code.");
+      failed = true;
+    } else {
+      const url = `${base}/api/v1/public/storage/key/${encodeURIComponent(storageKey)}/files?limit=1`;
+      const storageResult = await fetchJson<unknown>(url);
+      if (storageResult.ok) {
+        ok("Public storage key can list media files");
+      } else {
+        fail(`Public storage key check failed: ${storageResult.error}`);
+        failed = true;
+      }
+    }
+  } else {
+    warn("Skip storage check. Provide --storage-key or VITE_LCLOUD_STORAGE_KEY to verify media access.");
+  }
+
   if (failed) process.exitCode = 1;
 }
 
@@ -165,6 +188,11 @@ function init(options: Flags): void {
   const endpoint =
     stringFlag(options.endpoint) ?? env("LCLOUD_ENDPOINT") ?? "https://tg-lcloud.duckdns.org";
   const key = stringFlag(options.key) ?? env("LCLOUD_DB_KEY") ?? "lcpk_your_publishable_key";
+  const storageKey =
+    stringFlag(options["storage-key"]) ??
+    stringFlag(options.storage) ??
+    env("LCLOUD_STORAGE_KEY") ??
+    "lstore_your_storage_key";
   const collection = stringFlag(options.collection) ?? env("LCLOUD_COLLECTION") ?? "posts";
   const force = Boolean(options.force || options.f);
   const envFile = stringFlag(options.file) ?? ".env.example";
@@ -175,6 +203,7 @@ function init(options: Flags): void {
     [
       `VITE_LCLOUD_ENDPOINT=${endpoint}`,
       `VITE_LCLOUD_DB_KEY=${key}`,
+      `VITE_LCLOUD_STORAGE_KEY=${storageKey}`,
       `VITE_LCLOUD_COLLECTION=${collection}`,
       "",
     ].join("\n"),
@@ -188,6 +217,7 @@ function init(options: Flags): void {
       "const lcloud = createBrowserClient({",
       "  endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,",
       "  publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,",
+      "  storageKey: import.meta.env.VITE_LCLOUD_STORAGE_KEY,",
       "});",
       "",
       "export const collection = lcloud.collection(import.meta.env.VITE_LCLOUD_COLLECTION);",
@@ -199,7 +229,7 @@ function init(options: Flags): void {
     ].join("\n"),
     force,
   );
-  note("Use a DB Console publishable key (lcpk_...). Never put lc- owner API keys in frontend env files.");
+  note("Use DB Console publishable keys: lcpk_... for JSON DB and lstore_... for media. Never put lc- owner API keys in frontend env files.");
 }
 
 async function upgrade(options: Flags): Promise<void> {
@@ -280,7 +310,7 @@ function check(target: string, options: Flags): void {
 
 function printHelp(scope?: string): void {
   if (!scope || scope === "help") {
-    console.log(`\n${paint.bold("@lcloud/db CLI")} ${paint.dim(`v${pkg.version}`)}\n\nUsage:\n  npx @lcloud/db doctor --endpoint <url> --key <lcpk_...> --collection <name>\n  npx @lcloud/db init --endpoint <url> --key <lcpk_...> --collection <name>\n  npx @lcloud/db upgrade [--run]\n  npx @lcloud/db check [path] [--strict]\n\nCommands:\n  doctor   Check SDK version, endpoint _meta, limits, rate limits, and publishable key access\n  init     Create .env.example and a browser client sample\n  upgrade  Show or run the package-manager command for the latest SDK\n  check    Scan a project for unsafe frontend keys and local JSON fallbacks\n`);
+    console.log(`\n${paint.bold("@lcloud/db CLI")} ${paint.dim(`v${pkg.version}`)}\n\nUsage:\n  npx @lcloud/db doctor --endpoint <url> --key <lcpk_...> --storage-key <lstore_...> --collection <name>\n  npx @lcloud/db init --endpoint <url> --key <lcpk_...> --storage-key <lstore_...> --collection <name>\n  npx @lcloud/db upgrade [--run]\n  npx @lcloud/db check [path] [--strict]\n\nCommands:\n  doctor   Check SDK version, endpoint _meta, limits, rate limits, DB key access, and storage key access\n  init     Create .env.example and a browser client sample\n  upgrade  Show or run the package-manager command for the latest SDK\n  check    Scan a project for unsafe frontend keys and local JSON fallbacks\n`);
     return;
   }
   console.log(`Run: npx @lcloud/db ${scope} --help`);

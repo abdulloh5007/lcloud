@@ -2,11 +2,13 @@ import type {
   ApiErrorBody,
   AuthState,
   CloudRow,
+  CreateStoragePublicKeyInput,
   FileRow,
   FilesPage,
   JsonCollectionRow,
   JsonDbMeta,
   JsonDbPublicKeyRow,
+  JsonStoragePublicKeyRow,
   JsonDocumentsPage,
   JsonQueryInput,
   JsonRulesRow,
@@ -397,6 +399,17 @@ export const jsonDb = {
     }),
   revokePublicKey: (id: number) =>
     api<{ ok: boolean }>(`/api/v1/db/public-keys/${id}`, {
+      method: "DELETE",
+    }),
+  listStorageKeys: () =>
+    api<JsonStoragePublicKeyRow[]>("/api/v1/storage/public-keys"),
+  createStorageKey: (input: CreateStoragePublicKeyInput) =>
+    api<JsonStoragePublicKeyRow>("/api/v1/storage/public-keys", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  revokeStorageKey: (id: number) =>
+    api<{ ok: boolean }>(`/api/v1/storage/public-keys/${id}`, {
       method: "DELETE",
     }),
   deleteCollection: (collection: string) =>

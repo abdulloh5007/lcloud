@@ -353,6 +353,38 @@ class JsonDbPublicKey(Base):
     )
 
 
+class StoragePublicKey(Base):
+    """Publishable storage key for browser/serverless media access.
+
+    The key is safe to embed in frontend apps only because it is scoped to one
+    cloud and explicit permissions/limits. It is not an owner API key.
+    """
+
+    __tablename__ = "storage_public_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    cloud_id: Mapped[int] = mapped_column(
+        ForeignKey("clouds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(96), unique=True, nullable=False, index=True)
+    prefix: Mapped[str] = mapped_column(String(24), nullable=False)
+    label: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    allow_upload: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_download: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_delete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    max_file_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class JsonDocument(Base):
     """Current materialized state of one JSON document."""
 

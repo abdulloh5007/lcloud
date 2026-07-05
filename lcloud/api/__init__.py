@@ -19,6 +19,8 @@ from lcloud.api.shares import (
     public_share_router,
     shares_router,
 )
+from lcloud.api.storage_public import public_router as public_storage_router
+from lcloud.api.storage_public import router as storage_public_keys_router
 from lcloud.api.tags import file_tags_router, tags_router
 from lcloud.api.v2_clouds import router as v2_clouds_router
 from lcloud.api.v2_files import (
@@ -43,8 +45,10 @@ __all__ = [
     "payments_public_router",
     "pin_recovery_router",
     "public_share_router",
+    "public_storage_router",
     "public_json_db_router",
     "search_router",
+    "storage_public_keys_router",
     "shares_router",
     "tags_router",
     "v2_clouds_files_router",

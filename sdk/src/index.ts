@@ -34,6 +34,7 @@ export interface LCloudDbOptions {
 export interface LCloudPublicClientOptions {
   endpoint: string;
   publishableKey?: string;
+  storageKey?: string;
   fetch?: typeof fetch;
 }
 
@@ -55,6 +56,31 @@ export interface DbPublicKeyRow {
   label: string;
   created_at: string | null;
   revoked_at: string | null;
+}
+
+export interface StoragePublicKeyRow {
+  id: number;
+  cloud_id: number;
+  key: string;
+  prefix: string;
+  label: string;
+  allow_upload: boolean;
+  allow_list: boolean;
+  allow_download: boolean;
+  allow_delete: boolean;
+  max_file_bytes: number | null;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreateStoragePublicKeyInput {
+  cloud_id: number;
+  label?: string;
+  allow_upload?: boolean;
+  allow_list?: boolean;
+  allow_download?: boolean;
+  allow_delete?: boolean;
+  max_file_bytes?: number | null;
 }
 
 export interface CloudRow {
@@ -246,6 +272,20 @@ export interface LCloudDbMeta {
     list_max_limit: number;
     default_compress: boolean;
     lc2_client_signing: string;
+    publishable_storage_key_prefix?: string;
+    publishable_storage_key_manage_path?: string;
+    publishable_storage_key_path?: string;
+    max_publishable_storage_keys_per_user?: number;
+    public_storage_read_rate_limit?: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
+    public_storage_write_rate_limit?: {
+      capacity: number;
+      window_seconds: number;
+      key: string;
+    };
   };
   auth: {
     methods: string[];
@@ -319,7 +359,7 @@ export function createPublicClient(
 }
 
 export function createBrowserClient(
-  options: LCloudPublicClientOptions & { publishableKey: string },
+  options: LCloudPublicClientOptions & { publishableKey?: string; storageKey?: string },
 ): LCloudBrowserClient {
   return new LCloudBrowserClient(options);
 }
@@ -327,10 +367,12 @@ export function createBrowserClient(
 export class LCloudBrowserClient {
   private readonly client: LCloudDbClient;
   private readonly publishableKey?: string;
+  private readonly storageKey?: string;
 
   constructor(options: LCloudPublicClientOptions) {
     this.client = new LCloudDbClient({ ...options, credentials: "omit" });
     this.publishableKey = options.publishableKey;
+    this.storageKey = options.storageKey;
   }
 
   collection<T extends JsonObject = JsonObject>(name: string): PublicKeyCollectionRef<T> {
@@ -344,6 +386,13 @@ export class LCloudBrowserClient {
     collectionId: number,
   ): PublicCollectionRef<T> {
     return this.client.publicCollection<T>(collectionId);
+  }
+
+  storage(storageKey = this.storageKey): PublicStorageRef {
+    if (!storageKey) {
+      throw new Error("storageKey is required for storage()");
+    }
+    return new PublicStorageRef(this.client, storageKey);
   }
 
   async meta(): Promise<LCloudDbMeta> {
@@ -410,6 +459,23 @@ export class LCloudDbClient {
 
   async revokePublicKey(id: number): Promise<void> {
     await this.request<void>(`/api/v1/db/public-keys/${id}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listStorageKeys(): Promise<StoragePublicKeyRow[]> {
+    return this.request("/api/v1/storage/public-keys");
+  }
+
+  async createStorageKey(input: CreateStoragePublicKeyInput): Promise<StoragePublicKeyRow> {
+    return this.request("/api/v1/storage/public-keys", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async revokeStorageKey(id: number): Promise<void> {
+    await this.request<void>(`/api/v1/storage/public-keys/${id}`, {
       method: "DELETE",
     });
   }
@@ -575,7 +641,7 @@ export class LCloudDbClient {
     return `${this.endpoint}${path}`;
   }
 
-  private uploadWithXhr(
+  uploadWithXhr(
     path: string,
     body: FormData,
     onProgress: (progress: UploadProgress) => void,
@@ -923,6 +989,76 @@ export class PublicKeyCollectionRef<T extends JsonObject = JsonObject> {
       onChange,
       options,
     );
+  }
+}
+
+
+export class PublicStorageRef {
+  constructor(
+    private readonly client: LCloudDbClient,
+    private readonly storageKey: string,
+  ) {}
+
+  private get path(): string {
+    return `/api/v1/public/storage/key/${encodePath(this.storageKey)}/files`;
+  }
+
+  async listFiles(input: ListInput = {}): Promise<Page<FileRow>> {
+    const qs = new URLSearchParams();
+    if (input.limit !== undefined) qs.set("limit", String(input.limit));
+    if (input.offset !== undefined) qs.set("offset", String(input.offset));
+    const query = qs.toString();
+    return this.client.request<Page<FileRow>>(
+      `${this.path}${query ? `?${query}` : ""}`,
+    );
+  }
+
+  async upload(file: Blob, options: UploadMediaOptions = {}): Promise<FileRow> {
+    const fd = new FormData();
+    const name =
+      options.name ??
+      ("name" in file && typeof file.name === "string" ? file.name : "upload.bin");
+    fd.append("file", file, name);
+    fd.append("compress", String(options.compress ?? true));
+    if (options.onProgress && typeof XMLHttpRequest !== "undefined") {
+      return this.client.uploadWithXhr(this.path, fd, options.onProgress);
+    }
+    return this.client.request<FileRow>(this.path, {
+      method: "POST",
+      body: fd,
+    });
+  }
+
+  file(id: number): PublicStorageFileRef {
+    return new PublicStorageFileRef(this.client, this.storageKey, id);
+  }
+
+  downloadUrl(id: number): string {
+    return this.file(id).downloadUrl();
+  }
+
+  async deleteFile(id: number): Promise<void> {
+    await this.file(id).delete();
+  }
+}
+
+export class PublicStorageFileRef {
+  constructor(
+    private readonly client: LCloudDbClient,
+    private readonly storageKey: string,
+    private readonly id: number,
+  ) {}
+
+  private get path(): string {
+    return `/api/v1/public/storage/key/${encodePath(this.storageKey)}/files/${this.id}`;
+  }
+
+  downloadUrl(): string {
+    return this.client.url(`${this.path}/download`);
+  }
+
+  async delete(): Promise<void> {
+    await this.client.request<void>(this.path, { method: "DELETE" });
   }
 }
 

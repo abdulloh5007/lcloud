@@ -108,10 +108,14 @@ def app_with_userbot(
     async def fake_delete(client: Any, *, chat_id: int, message_id: int) -> None:
         return None
 
+    import lcloud.api.storage_public as storage_public_mod
     import lcloud.api.v2_files as v2_files_mod
 
     monkeypatch.setattr(v2_files_mod, "upload_file_to_cloud", fake_upload)
     monkeypatch.setattr(v2_files_mod, "delete_file_message", fake_delete)
+    monkeypatch.setattr(storage_public_mod, "upload_file_to_cloud", fake_upload)
+    monkeypatch.setattr(storage_public_mod, "delete_file_message", fake_delete)
+    storage_public_mod.reset_storage_public_rate_limits()
 
     from lcloud.main import create_app
 
@@ -640,3 +644,73 @@ def test_upload_non_image_format_ignored_for_compression(
     body = r.json()
     assert body["compressed"] is False
     assert body["size"] == len(payload)
+
+
+# -------------------------------------------------------------- public storage keys
+
+
+def test_storage_public_key_uploads_without_session(app_with_userbot: TestClient) -> None:
+    _login_admin_telegram(app_with_userbot)
+    user_id, _ = _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    r_key = app_with_userbot.post(
+        "/api/v1/storage/public-keys",
+        json={
+            "cloud_id": cloud_id,
+            "label": "website",
+            "allow_upload": True,
+            "allow_list": True,
+            "allow_download": True,
+            "max_file_bytes": 1024,
+        },
+    )
+    assert r_key.status_code == 201, r_key.text
+    key = r_key.json()["key"]
+    assert key.startswith("lstore_")
+
+    app_with_userbot.cookies.clear()
+    payload = b"public media"
+    r_upload = app_with_userbot.post(
+        f"/api/v1/public/storage/key/{key}/files",
+        files={"file": ("public.txt", io.BytesIO(payload), "text/plain")},
+    )
+    assert r_upload.status_code == 201, r_upload.text
+    body = r_upload.json()
+    assert body["owner_user_id"] == user_id
+    assert body["cloud_id"] == cloud_id
+    assert body["size"] == len(payload)
+
+    r_list = app_with_userbot.get(f"/api/v1/public/storage/key/{key}/files")
+    assert r_list.status_code == 200
+    listed = r_list.json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["name"] == "public.txt"
+
+
+def test_storage_public_key_respects_upload_permission(app_with_userbot: TestClient) -> None:
+    _login_admin_telegram(app_with_userbot)
+    _login_v2(app_with_userbot)
+    cloud_id = _create_cloud(app_with_userbot)
+
+    r_key = app_with_userbot.post(
+        "/api/v1/storage/public-keys",
+        json={
+            "cloud_id": cloud_id,
+            "label": "readonly",
+            "allow_upload": False,
+            "allow_list": True,
+            "allow_download": True,
+            "allow_delete": False,
+        },
+    )
+    assert r_key.status_code == 201, r_key.text
+    key = r_key.json()["key"]
+
+    app_with_userbot.cookies.clear()
+    r_upload = app_with_userbot.post(
+        f"/api/v1/public/storage/key/{key}/files",
+        files={"file": ("blocked.txt", io.BytesIO(b"x"), "text/plain")},
+    )
+    assert r_upload.status_code == 403
+    assert r_upload.json()["detail"]["reason"] == "storage_key_upload_disabled"

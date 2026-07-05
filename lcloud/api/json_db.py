@@ -23,6 +23,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lcloud import __version__
+from lcloud.api.storage_public import (
+    MAX_STORAGE_PUBLIC_KEYS_PER_USER,
+    PUBLIC_STORAGE_RATE_WINDOW_SECONDS,
+    PUBLIC_STORAGE_READ_RATE_LIMIT,
+    PUBLIC_STORAGE_WRITE_RATE_LIMIT,
+    STORAGE_PUBLIC_KEY_PREFIX,
+)
 from lcloud.auth.v2_deps import CurrentUser, OptionalCurrentUser
 from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
@@ -1039,7 +1046,21 @@ async def db_meta() -> dict[str, Any]:
             "max_upload_bytes": settings.lc_max_file_bytes,
             "list_max_limit": MAX_DOCUMENT_LIST_LIMIT,
             "default_compress": True,
-            "lc2_client_signing": "optional_fields_supported",
+            "lc2_client_signing": "optional_fields_supported_for_owner_api",
+            "publishable_storage_key_prefix": STORAGE_PUBLIC_KEY_PREFIX,
+            "publishable_storage_key_manage_path": "/api/v1/storage/public-keys",
+            "publishable_storage_key_path": "/api/v1/public/storage/key/{storage_key}/files",
+            "max_publishable_storage_keys_per_user": MAX_STORAGE_PUBLIC_KEYS_PER_USER,
+            "public_storage_read_rate_limit": {
+                "capacity": PUBLIC_STORAGE_READ_RATE_LIMIT,
+                "window_seconds": PUBLIC_STORAGE_RATE_WINDOW_SECONDS,
+                "key": "ip",
+            },
+            "public_storage_write_rate_limit": {
+                "capacity": PUBLIC_STORAGE_WRITE_RATE_LIMIT,
+                "window_seconds": PUBLIC_STORAGE_RATE_WINDOW_SECONDS,
+                "key": "ip",
+            },
         },
         "auth": {
             "methods": ["lc_user_session_cookie", "bearer_api_key"],
