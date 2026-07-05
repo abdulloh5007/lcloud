@@ -85,7 +85,7 @@ export function FileTagsBar({ fileId }: { fileId: number }) {
         <button
           type="button"
           onClick={() => setAssignOpen(true)}
-          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-500 hover:border-blue-500 hover:text-blue-600 transition"
+          className="inline-flex min-h-10 items-center gap-1 px-3 py-1 text-xs rounded-full border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-500 hover:border-blue-500 hover:text-blue-600 transition-[border-color,color,scale] duration-150 ease-out active:scale-[0.96]"
         >
           <Lucide.Plus size={12} />
           тег
@@ -98,7 +98,7 @@ export function FileTagsBar({ fileId }: { fileId: number }) {
         <button
           type="button"
           onClick={() => setAssignOpen(true)}
-          className="inline-flex items-center justify-center w-6 h-6 rounded-full text-neutral-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-full text-neutral-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-[background-color,color,scale] duration-150 ease-out active:scale-[0.96]"
           aria-label="Add tag"
           title="Добавить тег"
         >

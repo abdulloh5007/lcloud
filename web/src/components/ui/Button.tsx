@@ -8,6 +8,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
   loading?: boolean;
+  static?: boolean;
   children?: ReactNode;
 }
 
@@ -29,6 +30,7 @@ export function Button({
   variant = "primary",
   size = "md",
   loading,
+  static: isStatic,
   className,
   disabled,
   children,
@@ -39,7 +41,8 @@ export function Button({
       {...rest}
       disabled={disabled || loading}
       className={classNames(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition disabled:cursor-not-allowed",
+        "inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-lg font-medium transition-[scale,background-color,color,box-shadow] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-70",
+        !isStatic && "active:scale-[0.96] disabled:active:scale-100",
         VARIANT[variant],
         SIZE[size],
         className,

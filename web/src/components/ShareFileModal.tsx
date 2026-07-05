@@ -235,7 +235,7 @@ function ShareRow({
         {share.active && (
           <button
             onClick={onCopy}
-            className="inline-flex items-center justify-center px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded shrink-0"
+            className="inline-flex h-10 w-10 items-center justify-center text-xs bg-blue-500 hover:bg-blue-600 text-white rounded-lg shrink-0 transition-[scale,background-color] duration-150 ease-out active:scale-[0.96]"
             aria-label="Копировать ссылку"
             title="Копировать ссылку"
           >

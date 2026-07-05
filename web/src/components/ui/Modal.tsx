@@ -27,14 +27,14 @@ export function Modal({ open, onClose, title, children, width = "max-w-md" }: Pr
     >
       <div
         className={classNames(
-          "w-full mx-4 rounded-2xl bg-panel dark:bg-panel-dark p-5 shadow-xl",
+          "w-full mx-4 rounded-2xl bg-panel dark:bg-panel-dark p-5 surface-shadow motion-safe:animate-[modal-panel-in_180ms_cubic-bezier(0.2,0,0,1)]",
           width,
         )}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        {title && <h2 className="text-lg font-semibold mb-4">{title}</h2>}
+        {title && <h2 className="text-lg font-semibold mb-4 text-balance">{title}</h2>}
         {children}
       </div>
     </div>

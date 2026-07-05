@@ -473,7 +473,7 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
                 <div className="h-1 bg-neutral-200 dark:bg-neutral-800 rounded overflow-hidden">
                   <div
                     className={classNames(
-                      "h-full transition-all",
+                      "h-full transition-[width,background-color] duration-200 ease-out",
                       p.error
                         ? "bg-red-500"
                         : p.phase === "signing"
@@ -511,7 +511,7 @@ export function FilesPanel({ cloudId, compressUploads }: Props) {
         }}
       >
         {dragOver && (
-          <div className="pointer-events-none sticky top-0 z-10 mb-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/95 dark:bg-blue-950/90 px-3 py-2 text-sm text-blue-700 dark:text-blue-200">
+        <div className="pointer-events-none sticky top-0 z-10 mb-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/95 dark:bg-blue-950/90 px-3 py-2 text-sm text-blue-700 dark:text-blue-200 shadow-sm">
             Отпустите файлы, чтобы добавить их в очередь.
           </div>
         )}
@@ -672,12 +672,12 @@ function QueuedUploadCard({
           <img
             src={item.previewUrl}
             alt={item.file.name}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover media-outline"
           />
         ) : item.kind === "video" && item.previewUrl ? (
           <video
             src={item.previewUrl}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover media-outline"
             muted
             preload="metadata"
           />
@@ -724,7 +724,7 @@ function FileGridCard({
   const isImage = file.mime.startsWith("image/");
   return (
     <div
-      className="rounded-xl bg-panel dark:bg-panel-dark border border-neutral-200 dark:border-neutral-800 p-3 flex flex-col gap-2 hover:border-neutral-300 dark:hover:border-neutral-700 transition cursor-pointer"
+      className="rounded-xl bg-panel dark:bg-panel-dark p-3 flex flex-col gap-2 surface-shadow surface-shadow-hover active:scale-[0.99] cursor-pointer"
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -744,7 +744,7 @@ function FileGridCard({
             alt={file.name}
             loading="lazy"
             decoding="async"
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover media-outline"
           />
         </div>
       ) : (
@@ -790,7 +790,7 @@ function FileGridCard({
         <div className="flex items-center gap-1">
           <a
             href={filesApi.downloadUrl(file.id)}
-            className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-blue-600"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100 hover:text-blue-600 dark:hover:bg-neutral-800 transition-[background-color,color] duration-150 ease-out active:scale-[0.96]"
             aria-label="Download"
             title="Download"
           >
@@ -798,7 +798,7 @@ function FileGridCard({
           </a>
           <button
             type="button"
-            className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-red-600"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100 hover:text-red-600 dark:hover:bg-neutral-800 transition-[background-color,color,scale] duration-150 ease-out active:scale-[0.96]"
             onClick={() => {
               if (window.confirm(`Удалить «${file.name}»?`)) onDelete();
             }}

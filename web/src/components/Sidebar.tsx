@@ -89,7 +89,7 @@ export function Sidebar({
       <aside
         className={classNames(
           // Mobile: fixed off-canvas drawer; Desktop: static column
-          "fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-panel dark:bg-panel-dark flex flex-col transition-transform md:static md:translate-x-0 md:max-w-none md:w-72",
+          "fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-panel dark:bg-panel-dark flex flex-col transition-transform duration-200 ease-out md:static md:translate-x-0 md:max-w-none md:w-72",
           mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         )}
       >
@@ -172,7 +172,7 @@ export function Sidebar({
               </button>
               <button
                 type="button"
-                className="md:opacity-0 md:group-hover:opacity-100 text-neutral-400 hover:text-red-600 p-1 transition"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30 md:opacity-0 md:group-hover:opacity-100 transition-[opacity,background-color,color,scale] duration-150 ease-out active:scale-[0.96]"
                 onClick={() => {
                   if (window.confirm(`Отвязать «${c.name}»?`)) {
                     remove.mutate(c.id);

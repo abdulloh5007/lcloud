@@ -276,7 +276,7 @@ function PreviewBody({
         <img
           src={isHighQuality ? fullUrl : url}
           alt={name}
-          className="max-w-full max-h-[80vh] object-contain"
+          className="max-w-full max-h-[80vh] object-contain media-outline rounded-lg"
         />
       );
     case "video":
@@ -285,7 +285,7 @@ function PreviewBody({
           src={fullUrl}
           controls
           preload="metadata"
-          className="max-w-full max-h-[80vh]"
+          className="max-w-full max-h-[80vh] media-outline rounded-lg"
         >
           Your browser cannot play this video.
         </video>

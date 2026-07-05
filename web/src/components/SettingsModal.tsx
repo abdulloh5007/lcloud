@@ -56,7 +56,7 @@ export function SettingsModal({
             type="button"
             onClick={() => setTab(t.key)}
             className={classNames(
-              "px-4 py-2 text-sm border-b-2 transition whitespace-nowrap",
+              "px-4 py-2 text-sm border-b-2 transition-[border-color,color] duration-150 ease-out whitespace-nowrap",
               tab === t.key
                 ? "border-blue-600 text-blue-600 font-medium"
                 : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
@@ -146,7 +146,7 @@ function Choice({
       type="button"
       onClick={onClick}
       className={classNames(
-        "text-left p-3 rounded-lg border-2 transition",
+        "text-left p-3 rounded-xl border-2 transition-[border-color,background-color,scale] duration-150 ease-out active:scale-[0.96]",
         selected
           ? "border-blue-600 bg-blue-50 dark:bg-blue-950/30"
           : "border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700"

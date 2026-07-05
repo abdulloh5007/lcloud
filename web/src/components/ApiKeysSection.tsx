@@ -88,7 +88,7 @@ export function ApiKeysSection() {
             </code>
             <button
               onClick={() => void copy(justMinted.raw)}
-              className="px-3 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded"
+              className="inline-flex h-10 w-10 items-center justify-center text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-[scale,background-color] duration-150 ease-out active:scale-[0.96]"
               aria-label="Копировать ключ"
               title="Копировать ключ"
             >
@@ -107,7 +107,7 @@ export function ApiKeysSection() {
       {!creating && !justMinted && (
         <button
           onClick={() => setCreating(true)}
-          className="inline-flex w-full items-center justify-center gap-2 py-2 border border-dashed border-neutral-300 dark:border-neutral-700 rounded-lg text-sm text-neutral-600 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+          className="inline-flex min-h-10 w-full items-center justify-center gap-2 py-2 border border-dashed border-neutral-300 dark:border-neutral-700 rounded-lg text-sm text-neutral-600 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-[scale,background-color,border-color,color] duration-150 ease-out active:scale-[0.96]"
         >
           <Plus size={15} />
           Создать ключ

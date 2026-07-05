@@ -63,7 +63,7 @@ export function AccountSection({ me, onLogout }: Props) {
           </div>
           <div className="h-2 rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${
+              className={`h-full rounded-full transition-[width,background-color] duration-200 ease-out ${
                 pct > 90
                   ? 'bg-red-500'
                   : pct > 70

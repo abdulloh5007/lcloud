@@ -106,7 +106,7 @@ export function BuyAccountScreen({ onCancel }: Props) {
             </div>
             <button
               onClick={copyCard}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-md text-xs backdrop-blur transition"
+              className="inline-flex min-h-10 items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-md text-xs backdrop-blur transition-[scale,background-color] duration-150 ease-out active:scale-[0.96]"
             >
               {copied ? <Check size={13} /> : <Clipboard size={13} />}
               {copied ? "Скопировано" : "Копировать №"}
@@ -171,7 +171,7 @@ export function BuyAccountScreen({ onCancel }: Props) {
       <button
         onClick={() => submit.mutate()}
         disabled={!valid || submit.isPending}
-        className="inline-flex w-full items-center justify-center gap-2 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition"
+        className="inline-flex min-h-11 w-full items-center justify-center gap-2 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-[scale,background-color] duration-150 ease-out active:scale-[0.96] disabled:active:scale-100"
       >
         {!submit.isPending && <Send size={16} />}
         {submit.isPending ? "Отправляем…" : "Я оплатил, отправить заявку"}

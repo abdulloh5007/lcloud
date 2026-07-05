@@ -66,7 +66,7 @@ export function PaymentRequestsAdmin() {
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className={`px-3 py-1 rounded-md transition ${
+            className={`min-h-10 px-3 py-1 rounded-md transition-[background-color,color,scale] duration-150 ease-out active:scale-[0.96] ${
               filter === f
                 ? "bg-blue-600 text-white"
                 : "bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
