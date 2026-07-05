@@ -26,6 +26,7 @@ metadata indexing on top.
 - **[Architecture](docs/ARCHITECTURE.md)** — how it all fits together
 - **[Crypto model](docs/CRYPTO.md)** — what the seed phrase actually does
 - **[Operator guide](docs/OPERATOR.md)** — deploy, configure, run
+- **[Docker deploy](docs/DOCKER.md)** — run LCloud on a new VPS with persistent volumes
 - **Live Swagger UI**: `https://your-host/docs`
 - **OpenAPI JSON**: `https://your-host/openapi.json`
 
@@ -77,6 +78,19 @@ LCloud/
 │       └── hooks/       # useAuth, useAuthV2
 └── docs/                # All markdown docs
 ```
+
+
+## Run with Docker
+
+```bash
+cp .env.docker.example .env.docker
+# edit .env.docker: TG_API_ID, TG_API_HASH, LC_PUBLIC_BASE_URL
+docker compose up -d --build
+```
+
+Persistent state is mounted in `./data`; do not delete it during upgrades. See
+[Docker deploy](docs/DOCKER.md) for VPS setup, reverse proxy, and Telegram DB
+restore commands.
 
 ## Run locally
 
