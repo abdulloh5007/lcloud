@@ -518,3 +518,74 @@ def test_json_db_create_can_reuse_deleted_document_id(app_client: TestClient) ->
     assert recreated.status_code == 201, recreated.text
     assert recreated.json()["data"]["title"] == "v2"
     assert recreated.json()["version"] == 3
+
+
+
+def test_json_db_backup_status_reports_lag(app_client: TestClient) -> None:
+    _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "backup_notes"}).status_code == 201
+    assert (
+        app_client.post(
+            "/api/v1/db/backup_notes",
+            json={"id": "one", "data": {"title": "One"}},
+        ).status_code
+        == 201
+    )
+
+    status = app_client.get("/api/v1/db/backup/status")
+    assert status.status_code == 200, status.text
+    body = status.json()
+    assert body["enabled"] is True
+    assert body["format"] == "lcloud-json-db-segment-v1"
+    assert body["last_local_operation_id"] >= 2
+    assert body["last_backed_up_operation_id"] == 0
+    assert body["lag_operations"] == body["last_local_operation_id"]
+
+
+def test_json_db_backup_once_uploads_segment(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from lcloud.userbot import db_backup as db_backup_mod
+    from lcloud.userbot.client import UserbotManager, set_userbot_manager
+
+    _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "backup_run"}).status_code == 201
+    assert (
+        app_client.post(
+            "/api/v1/db/backup_run",
+            json={"id": "one", "data": {"title": "One"}},
+        ).status_code
+        == 201
+    )
+
+    class FakeMessage:
+        id = 777
+
+    class FakeTelegramClient:
+        def __init__(self) -> None:
+            self.captions: list[str] = []
+
+        async def send_file(self, entity, *, file, force_document, caption, attributes):
+            assert entity == "me"
+            assert force_document is True
+            assert caption.startswith("LCDB1:")
+            self.captions.append(caption)
+            return FakeMessage()
+
+    from lcloud.config import get_settings
+
+    settings = get_settings()
+    manager = UserbotManager(settings)
+    manager._client = FakeTelegramClient()  # type: ignore[assignment]
+    monkeypatch.setattr(manager, "is_admin_authorized", lambda: asyncio.sleep(0, True))
+    set_userbot_manager(manager)
+
+    uploaded = asyncio.run(db_backup_mod.run_json_db_backup_once(settings))
+    assert uploaded == 1
+
+    status = app_client.get("/api/v1/db/backup/status").json()
+    assert status["lag_operations"] == 0
+    assert status["last_segment"]["telegram_message_id"] == 777
+    assert status["last_segment"]["operation_count"] >= 2

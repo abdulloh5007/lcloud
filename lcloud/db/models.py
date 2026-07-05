@@ -385,6 +385,56 @@ class StoragePublicKey(Base):
     )
 
 
+class JsonBackupState(Base):
+    """Per-user JSON DB Telegram backup cursor."""
+
+    __tablename__ = "json_backup_state"
+
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_operation_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class JsonBackupSegment(Base):
+    """One uploaded Telegram segment of JSON DB operations."""
+
+    __tablename__ = "json_backup_segments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    first_operation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    last_operation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    operation_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    telegram_chat: Mapped[str] = mapped_column(String(64), nullable=False, default="me")
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "first_operation_id",
+            "last_operation_id",
+            name="uq_json_backup_segments_owner_range",
+        ),
+    )
+
+
 class JsonDocument(Base):
     """Current materialized state of one JSON document."""
 

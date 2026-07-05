@@ -39,6 +39,7 @@ from lcloud.db.models import (
     JsonDocument,
     JsonOperation,
 )
+from lcloud.userbot.db_backup import get_json_db_backup_status
 from lcloud.utils.rate_limit import RateLimiter
 
 router = APIRouter(prefix="/api/v1/db", tags=["json_db"])
@@ -1073,6 +1074,14 @@ async def db_meta() -> dict[str, Any]:
                 "applies_to": ["/auth/v2/challenge", "/auth/v2/verify"],
             },
         },
+        "backup": {
+            "telegram_segments": True,
+            "target": "telegram_saved_messages",
+            "format": "lcloud-json-db-segment-v1",
+            "status_path": "/api/v1/db/backup/status",
+            "interval_seconds": settings.lc_json_db_backup_interval_seconds,
+            "batch_operations": settings.lc_json_db_backup_batch_operations,
+        },
         "rate_limits": {
             "db_api": "no_explicit_per_user_rate_limit_yet",
             "storage_api": "no_explicit_http_rate_limit_yet",
@@ -1091,6 +1100,14 @@ async def db_meta() -> dict[str, Any]:
             "deep_patch_merge",
         ],
     }
+
+
+@router.get(
+    "/backup/status",
+    summary="JSON DB Telegram backup status",
+)
+async def backup_status(user: CurrentUser) -> dict[str, Any]:
+    return await get_json_db_backup_status(user.id)
 
 
 @router.get(

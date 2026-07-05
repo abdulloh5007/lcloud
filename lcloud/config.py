@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # Files
     lc_max_file_bytes: int = Field(default=1024 * 1024 * 1024)  # 1 GiB
 
+    # JSON DB Telegram backup
+    lc_json_db_backup_enabled: bool = Field(default=True)
+    lc_json_db_backup_interval_seconds: float = Field(default=5.0, ge=1.0, le=3600.0)
+    lc_json_db_backup_batch_operations: int = Field(default=250, ge=1, le=5000)
+
     # Auth
     lc_magic_link_ttl_seconds: int = Field(default=900)
     lc_session_ttl_seconds: int = Field(default=7 * 24 * 3600)

@@ -67,6 +67,7 @@ from lcloud.userbot.commands import (
     CommandContext,
     register_saved_messages_handlers,
 )
+from lcloud.userbot.db_backup import start_json_db_backup_worker, stop_json_db_backup_worker
 from lcloud.userbot.handlers import IngestContext, register_userbot_handlers
 from lcloud.userbot.inchat import InChatContext, register_in_chat_handlers
 from lcloud.userbot.scan import schedule_scan
@@ -193,6 +194,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 6. Background scan if already authorized. Keep FastAPI startup responsive:
     # Telegram scanning/seed delivery can block on MTProto reconnects.
     post_login_task = schedule_post_login_scan()
+    start_json_db_backup_worker(settings)
 
     try:
         yield
@@ -201,6 +203,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             post_login_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await post_login_task
+        await stop_json_db_backup_worker()
         await manager.stop()
         await dispose_engine()
         reset_worker_pool()

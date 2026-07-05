@@ -166,6 +166,41 @@ optional publishable-key collection access. `init` writes a browser-only
 manager command for the latest SDK. `check` scans app code for frontend owner
 API keys and local JSON fallback patterns.
 
+
+## Telegram DB backup
+
+LCloud DB writes stay fast: API requests commit to SQLite first, then a
+background worker copies committed `json_operations` to Telegram as compressed
+segments. Each segment is uploaded to the connected Telegram account's Saved
+Messages as a document with an `LCDB1:{...}` caption and a SHA-256 checksum.
+
+Live status:
+
+```bash
+curl "$LCLOUD_ENDPOINT/api/v1/db/backup/status"   -H "Authorization: Bearer $LCLOUD_API_KEY"
+```
+
+Important fields:
+
+| Field | Meaning |
+| --- | --- |
+| `last_local_operation_id` | newest local JSON DB operation |
+| `last_backed_up_operation_id` | newest operation uploaded to Telegram |
+| `lag_operations` | operations still waiting for Telegram backup |
+| `last_segment.telegram_message_id` | Telegram message that stores the latest segment |
+
+Environment knobs:
+
+```env
+LC_JSON_DB_BACKUP_ENABLED=true
+LC_JSON_DB_BACKUP_INTERVAL_SECONDS=5
+LC_JSON_DB_BACKUP_BATCH_OPERATIONS=250
+```
+
+Current backup format is `lcloud-json-db-segment-v1`. The restore command is
+built on this format next: download `LCDB1` segments from Telegram, verify
+checksums, then replay operations into a fresh SQLite database.
+
 ## REST API
 
 Base URL:
