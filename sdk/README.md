@@ -8,6 +8,31 @@ JSON documents and upload files/media through one client.
 npm install @lcloud/db
 ```
 
+## CLI
+
+The package includes a small terminal helper for setup, health checks, upgrade
+checks, and AI-agent audits:
+
+```bash
+npx @lcloud/db doctor --endpoint https://tg-lcloud.duckdns.org --key lcpk_... --collection posts
+npx @lcloud/db init --endpoint https://tg-lcloud.duckdns.org --key lcpk_... --collection posts
+npx @lcloud/db upgrade
+npx @lcloud/db check . --strict
+```
+
+Commands:
+
+| Command | Use |
+| --- | --- |
+| `doctor` | Checks installed/latest SDK version, `_meta`, live limits, rate limits, and optional publishable-key collection access. |
+| `init` | Writes `.env.example` and `lcloud-db.example.ts` for browser-only usage. |
+| `upgrade` | Shows the correct `npm`/`pnpm`/`yarn`/`bun` command for the newest SDK; add `--run` to execute it. |
+| `check` | Scans a project for unsafe frontend owner keys and local JSON fallback patterns. |
+
+`doctor` reads `LCLOUD_ENDPOINT`, `VITE_LCLOUD_ENDPOINT`, `LCLOUD_DB_KEY`,
+`VITE_LCLOUD_DB_KEY`, `LCLOUD_COLLECTION`, and `VITE_LCLOUD_COLLECTION` when
+flags are omitted.
+
 ```ts
 import { createClient } from "@lcloud/db";
 

@@ -1,6 +1,6 @@
 {
   "name": "@lcloud/db",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "description": "TypeScript client for LCloud DB JSON document collections.",
   "type": "module",
   "main": "dist/index.js",
@@ -46,6 +46,10 @@
     "supabase"
   ],
   "devDependencies": {
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "@types/node": "^22.10.2"
+  },
+  "bin": {
+    "lcloud-db": "dist/cli.js"
   }
 }

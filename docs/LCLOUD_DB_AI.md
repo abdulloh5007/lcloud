@@ -70,6 +70,32 @@ const page = await posts.list({ limit: 20 });
 Use `VITE_LCLOUD_DB_KEY=lcpk_...`, not `LCLOUD_API_KEY`, in frontend env.
 Frontend env vars are public after build.
 
+## Before coding
+
+Run the CLI checks when shell access is available:
+
+```bash
+npx @lcloud/db doctor --endpoint $LCLOUD_ENDPOINT --key $VITE_LCLOUD_DB_KEY --collection posts
+npx @lcloud/db check . --strict
+```
+
+Use `doctor` to read the live server contract (`_meta`), SDK version status,
+rate limits, page limits, batch limits, upload limit, and whether a publishable
+key can access the intended collection. Use `check` to catch the common AI
+mistakes: frontend owner API keys and local JSON DB fallbacks.
+
+For a new browser-only integration, scaffold the expected env and sample code:
+
+```bash
+npx @lcloud/db init --endpoint https://tg-lcloud.duckdns.org --key lcpk_... --collection posts
+```
+
+If the SDK is old, show the user the upgrade command:
+
+```bash
+npx @lcloud/db upgrade
+```
+
 ## Never do these
 
 - Do not expose `LCLOUD_API_KEY` in public browser bundles.

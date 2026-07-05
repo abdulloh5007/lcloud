@@ -34,10 +34,12 @@ npm run build
 npm run pack:check
 ```
 
-`npm run pack:check` must show only:
+`npm run pack:check` must show only intended package files, including:
 
 ```text
 README.md
+dist/cli.d.ts
+dist/cli.js
 dist/index.d.ts
 dist/index.js
 package.json
@@ -91,6 +93,8 @@ npm publish --access public
 - `npm run pack:check` includes only intended files.
 - `docs/LCLOUD_DB.md` matches SDK methods.
 - `docs/LCLOUD_DB_AI.md` has current examples.
+- `node dist/cli.js doctor --endpoint https://tg-lcloud.duckdns.org` works.
+- `node dist/cli.js check .` works.
 - No API keys, `.env`, `node_modules`, or local build trash are committed.
 - Tag the repo after publishing:
 

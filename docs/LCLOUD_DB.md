@@ -140,6 +140,23 @@ Documents:
 - nested objects are allowed
 - store files separately in LCloud Files; store file IDs/URLs in documents
 
+## CLI
+
+`@lcloud/db` ships with a terminal helper for real projects and AI agents:
+
+```bash
+npx @lcloud/db doctor --endpoint https://tg-lcloud.duckdns.org --key lcpk_... --collection posts
+npx @lcloud/db init --endpoint https://tg-lcloud.duckdns.org --key lcpk_... --collection posts
+npx @lcloud/db upgrade
+npx @lcloud/db check . --strict
+```
+
+`doctor` verifies the package version, server `_meta`, limits, rate limits, and
+optional publishable-key collection access. `init` writes a browser-only
+`.env.example` and TypeScript sample. `upgrade` prints or runs the package
+manager command for the latest SDK. `check` scans app code for frontend owner
+API keys and local JSON fallback patterns.
+
 ## REST API
 
 Base URL:
