@@ -20,6 +20,9 @@ metadata indexing on top.
 
 - **[Quickstart for end users](docs/QUICKSTART.md)** — sign up, upload files, get an API key
 - **[API guide](docs/API.md)** — curl / Python / JS examples for every endpoint
+- **[LCloud DB](docs/LCLOUD_DB.md)** — JSON document database API + SDK guide
+- **[LCloud DB AI guide](docs/LCLOUD_DB_AI.md)** — concise usage rules for AI agents
+- **[SDK publishing](docs/SDK_PUBLISHING.md)** — release checklist for `@lcloud/db`
 - **[Architecture](docs/ARCHITECTURE.md)** — how it all fits together
 - **[Crypto model](docs/CRYPTO.md)** — what the seed phrase actually does
 - **[Operator guide](docs/OPERATOR.md)** — deploy, configure, run
@@ -104,4 +107,4 @@ cd web && npm run build                   # frontend type check + build
 
 ## License
 
-WIP / not published.
+MIT. See [LICENSE](LICENSE).

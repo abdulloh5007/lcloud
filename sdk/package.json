@@ -1,13 +1,50 @@
 {
   "name": "@lcloud/db",
   "version": "0.1.0",
+  "description": "TypeScript client for LCloud DB JSON document collections.",
   "type": "module",
-  "private": true,
   "main": "dist/index.js",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
-  "scripts": {
-    "build": "tsc -p tsconfig.json"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mramziddin1228-gif/LCloud.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/mramziddin1228-gif/LCloud/issues"
+  },
+  "homepage": "https://github.com/mramziddin1228-gif/LCloud#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "lcloud",
+    "database",
+    "json",
+    "document-database",
+    "telegram",
+    "firebase",
+    "supabase"
+  ],
   "devDependencies": {
     "typescript": "^5.6.3"
   }
