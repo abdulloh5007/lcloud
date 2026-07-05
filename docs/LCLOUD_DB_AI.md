@@ -600,6 +600,19 @@ LC_JSON_DB_BACKUP_INTERVAL_SECONDS=5
 LC_JSON_DB_BACKUP_BATCH_OPERATIONS=250
 ```
 
-Current backup format is `lcloud-json-db-segment-v1`. The restore command is
-built on this format next: download `LCDB1` segments from Telegram, verify
-checksums, then replay operations into a fresh SQLite database.
+Current backup format is `lcloud-json-db-segment-v1`. Restore downloads
+`LCDB1` segments from Telegram, verifies checksums, then replays operations
+into SQLite.
+
+Restore after bootstrapping the target user/account. Stop the API service before a real restore so it does not write to SQLite in parallel:
+
+```bash
+systemctl stop lcloud.service
+python -m lcloud.userbot.db_restore --target-user-id 1 --dry-run
+python -m lcloud.userbot.db_restore --target-user-id 1
+systemctl start lcloud.service
+```
+
+Use `--source-user-id OLD_ID` when restoring only one old owner namespace from
+Saved Messages. `--target-user-id` is the local user that will own restored
+collections on the new VPS.

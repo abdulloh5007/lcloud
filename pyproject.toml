@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 lcloud = "lcloud.main:run"
 lcloud-login = "lcloud.login:main"
+lcloud-db-restore = "lcloud.userbot.db_restore:main"
 
 [build-system]
 requires = ["hatchling"]

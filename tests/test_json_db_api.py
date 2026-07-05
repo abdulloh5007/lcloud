@@ -589,3 +589,102 @@ def test_json_db_backup_once_uploads_segment(
     assert status["lag_operations"] == 0
     assert status["last_segment"]["telegram_message_id"] == 777
     assert status["last_segment"]["operation_count"] >= 2
+
+
+def test_json_db_restore_replays_lcdb1_segment(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import contextlib
+    import json
+
+    import sqlalchemy as sa
+
+    from lcloud.config import get_settings
+    from lcloud.db.base import get_sessionmaker
+    from lcloud.db.models import JsonBackupSegment, JsonBackupState, JsonCollection
+    from lcloud.userbot import db_backup as db_backup_mod
+    from lcloud.userbot.db_restore import restore_json_db_from_telegram
+
+    user_id = _login(app_client)
+    assert app_client.post("/api/v1/db/collections", json={"name": "restore_notes"}).status_code == 201
+    assert (
+        app_client.post(
+            "/api/v1/db/restore_notes",
+            json={"id": "one", "data": {"title": "One", "done": False}},
+        ).status_code
+        == 201
+    )
+    assert (
+        app_client.patch(
+            "/api/v1/db/restore_notes/one",
+            json={"data": {"done": True}},
+        ).status_code
+        == 200
+    )
+
+    settings = get_settings()
+    built = asyncio.run(
+        db_backup_mod._build_segment_file(  # type: ignore[attr-defined]
+            owner_user_id=user_id,
+            settings=settings,
+            batch_limit=100,
+        )
+    )
+    assert built is not None
+    path, meta = built
+    compressed = path.read_bytes()
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+    caption = "LCDB1:" + json.dumps(
+        {
+            "f": "lcloud-json-db-segment-v1",
+            "u": meta["owner_user_id"],
+            "a": meta["first_operation_id"],
+            "b": meta["last_operation_id"],
+            "n": meta["operation_count"],
+            "h": meta["sha256"],
+        },
+        separators=(",", ":"),
+    )
+
+    async def clear_json_db() -> None:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            await sess.execute(sa.delete(JsonBackupSegment))
+            await sess.execute(sa.delete(JsonBackupState))
+            await sess.execute(
+                sa.delete(JsonCollection).where(JsonCollection.owner_user_id == user_id)
+            )
+            await sess.commit()
+
+    asyncio.run(clear_json_db())
+    assert app_client.get("/api/v1/db/restore_notes/one").status_code == 404
+
+    class FakeMessage:
+        id = 999
+        message = caption
+
+    class FakeClient:
+        async def iter_messages(self, entity, *, search, **kwargs):
+            assert entity == "me"
+            assert search == "LCDB1:"
+            yield FakeMessage()
+
+        async def download_media(self, message, *, file):
+            assert message.id == 999
+            assert file is bytes
+            return compressed
+
+    result = asyncio.run(
+        restore_json_db_from_telegram(FakeClient(), target_owner_user_id=user_id)
+    )
+    assert result.segments == 1
+    assert result.operations >= 3
+
+    restored = app_client.get("/api/v1/db/restore_notes/one")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["data"] == {"title": "One", "done": True}
+    status = app_client.get("/api/v1/db/backup/status").json()
+    assert status["last_backed_up_operation_id"] == meta["last_operation_id"]
+    assert status["last_segment"]["status"] == "restored"
