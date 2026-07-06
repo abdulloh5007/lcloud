@@ -96,7 +96,12 @@ class Settings(BaseSettings):
     @property
     def session_path(self) -> Path:
         p = self.lc_session_file
-        return p if p.is_absolute() else PROJECT_ROOT / p
+        if p.is_absolute():
+            return p
+        if p.parts and p.parts[0] == "data":
+            suffix = Path(*p.parts[1:]) if len(p.parts) > 1 else Path()
+            return self.data_dir / suffix
+        return PROJECT_ROOT / p
 
     def ensure_runtime_dirs(self) -> None:
         for d in (self.data_dir, self.keys_dir, self.data_dir / "tmp"):
