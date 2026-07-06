@@ -19,6 +19,7 @@ def _bootstrap_isolated_env(
 ) -> Settings:
     monkeypatch.setenv("LC_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("LC_DB_URL", f"sqlite+aiosqlite:///{tmp_path / 'lcloud.db'}")
+    monkeypatch.setenv("LC_SESSION_FILE", str(tmp_path / "session.lcloud"))
     monkeypatch.setenv("TG_API_ID", "1")
     monkeypatch.setenv("TG_API_HASH", "testhash")
     monkeypatch.setenv("LC_ADMIN_TG_ID", "42")
