@@ -4,7 +4,9 @@ Use this file when an AI agent needs to write code against LCloud DB.
 
 ## What LCloud DB is
 
-LCloud DB is a JSON document database with collections and documents.
+LCloud DB has top-level Databases containing collections, documents, media,
+keys, and backups. Each Database creates one Telegram chat; media and JSON
+backup segments for that Database go to the same chat.
 It is similar to a small Firestore-style API, not SQL. Do not generate SQL for
 app code. Use the REST API or the `@lcloud/db` SDK. For files, photos, videos,
 and other binary media, use the SDK media helpers and store the returned file
@@ -18,17 +20,19 @@ secret API key:
 ```ts
 import { createClient } from "@lcloud/db";
 
-const db = createClient({
+const admin = createClient({
   endpoint: process.env.LCLOUD_ENDPOINT!,
   apiKey: process.env.LCLOUD_API_KEY!,
 });
 
-const meta = await db.meta();
+const meta = await admin.meta();
 ```
 
 Then:
 
 ```ts
+const project = await admin.createDatabase("my-app");
+const db = admin.database(project.id);
 await db.ensureCollection("users");
 
 const users = db.collection("users");
@@ -42,8 +46,8 @@ await users.batch([
 ]);
 await users.delete("alice");
 
-const media = await db.ensureCloud("app-media");
-const uploaded = await db.cloud(media.id).upload(fileOrBlob, {
+if (!project.cloud_id) throw new Error("Database has no Telegram cloud");
+const uploaded = await db.cloud(project.cloud_id).upload(fileOrBlob, {
   name: "avatar.png",
 });
 await users.update("alice", { avatar_file_id: uploaded.id });
@@ -51,6 +55,10 @@ await users.update("alice", { avatar_file_id: uploaded.id });
 const publicUsers = db.publicCollection(rules.collection_id);
 const publicAlice = await publicUsers.get("alice");
 ```
+
+Always reuse `admin.database(project.id)` for that project's collections and
+keys. Do not create a separate media cloud for a new Database. Unscoped legacy
+calls address only the migrated default database.
 
 For a browser-only static site with no backend, use a publishable DB key:
 
@@ -399,22 +407,16 @@ Never send more than `meta.batch.max_writes` writes in one batch.
 
 ## Media snippets
 
-List clouds:
+Use the selected Database cloud for media:
 
 ```ts
-const clouds = await db.listClouds();
-```
-
-Create a media cloud if needed:
-
-```ts
-const cloud = await db.ensureCloud("app-media");
+if (!project.cloud_id) throw new Error("Database has no Telegram cloud");
 ```
 
 Upload media:
 
 ```ts
-const uploaded = await db.cloud(cloud.id).upload(fileOrBlob, {
+const uploaded = await db.cloud(project.cloud_id).upload(fileOrBlob, {
   name: "photo.jpg",
   compress: true,
   onProgress(progress) {
@@ -435,7 +437,7 @@ await db.collection("posts").update("post_123", {
 List files:
 
 ```ts
-const files = await db.cloud(cloud.id).listFiles({ limit: 50 });
+const files = await db.cloud(project.cloud_id).listFiles({ limit: 50 });
 ```
 
 Delete file:
@@ -634,6 +636,7 @@ python -m lcloud.userbot.db_restore --target-user-id 1
 systemctl start lcloud.service
 ```
 
-Use `--source-user-id OLD_ID` when restoring only one old owner namespace from
-Saved Messages. `--target-user-id` is the local user that will own restored
+Use `--chat-id TELEGRAM_CHAT_ID` when restoring from a specific Database chat,
+and `--source-database-id OLD_DATABASE_ID` when that chat contains multiple
+backup streams. `--target-user-id` is the local user that will own restored
 collections on the new VPS.

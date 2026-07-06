@@ -185,6 +185,129 @@ def test_json_db_isolated_per_user(app_client: TestClient) -> None:
     assert app_client.get("/api/v1/db/notes/one").status_code == 404
 
 
+def test_databases_isolate_collections_and_share_one_telegram_chat(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any
+
+    import sqlalchemy as sa
+
+    from lcloud.api import json_databases as databases_mod
+    from lcloud.config import get_settings
+    from lcloud.db.base import get_sessionmaker
+    from lcloud.db.models import JsonCollection
+    from lcloud.userbot import db_backup as db_backup_mod
+    from lcloud.userbot.client import set_userbot_manager
+
+    _login(app_client)
+    owner_cookie = app_client.cookies.get("lc_user_session")
+    assert owner_cookie
+    chat_ids = iter([-1000000000101, -1000000000102])
+
+    async def fake_create_chat(
+        client: Any, *, name: str, signing_key: Any
+    ) -> tuple[int, str, Any]:
+        chat_id = next(chat_ids)
+        return chat_id, f"LCLOUD1:{chat_id}", object()
+
+    class FakeManager:
+        is_started = True
+        client = object()
+
+        async def snapshot(self) -> Any:
+            return SimpleNamespace(authorized=True)
+
+    monkeypatch.setattr(databases_mod, "create_cloud_chat", fake_create_chat)
+    set_userbot_manager(FakeManager())  # type: ignore[arg-type]
+
+    first = app_client.post("/api/v1/db/databases", json={"name": "First"})
+    second = app_client.post("/api/v1/db/databases", json={"name": "Second"})
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_db = first.json()
+    second_db = second.json()
+    assert first_db["cloud_id"] != second_db["cloud_id"]
+    assert first_db["telegram_backed"] is True
+
+    for database in (first_db, second_db):
+        created = app_client.post(
+            f"/api/v1/db/collections?database_id={database['id']}",
+            json={"name": "posts"},
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["database_id"] == database["id"]
+        assert app_client.put(
+            f"/api/v1/db/collections/posts/rules?database_id={database['id']}",
+            json={"read": "authenticated", "write": "authenticated"},
+        ).status_code == 200
+
+    assert len(app_client.get(
+        f"/api/v1/db/collections?database_id={first_db['id']}"
+    ).json()) == 1
+
+    storage_key = app_client.post(
+        "/api/v1/storage/public-keys",
+        json={"database_id": first_db["id"], "label": "media"},
+    )
+    assert storage_key.status_code == 201, storage_key.text
+    assert storage_key.json()["database_id"] == first_db["id"]
+    assert storage_key.json()["cloud_id"] == first_db["cloud_id"]
+
+    first_key = app_client.post(
+        f"/api/v1/db/public-keys?database_id={first_db['id']}",
+        json={"label": "first-app"},
+    ).json()["key"]
+    second_key = app_client.post(
+        f"/api/v1/db/public-keys?database_id={second_db['id']}",
+        json={"label": "second-app"},
+    ).json()["key"]
+    app_client.cookies.clear()
+    first_auth = app_client.post(
+        f"/api/v1/public/auth/key/{first_key}/anonymous"
+    ).json()
+    cross_database = app_client.post(
+        f"/api/v1/public/db/key/{second_key}/posts",
+        headers={"Authorization": f"Bearer {first_auth['access_token']}"},
+        json={"id": "blocked", "data": {"title": "Blocked"}},
+    )
+    assert cross_database.status_code == 403
+
+    # Owner cookie is needed again for the owner API operations below.
+    app_client.cookies.set("lc_user_session", owner_cookie)
+
+    assert app_client.post(
+        f"/api/v1/db/posts?database_id={first_db['id']}",
+        json={"id": "one", "data": {"title": "First"}},
+    ).status_code == 201
+
+    async def collection_and_backup_target() -> tuple[int, int | str]:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            collection_id = int(
+                (
+                    await sess.execute(
+                        sa.select(JsonCollection.id).where(
+                            JsonCollection.database_id == first_db["id"]
+                        )
+                    )
+                ).scalar_one()
+            )
+        built = await db_backup_mod._build_segment_file(  # type: ignore[attr-defined]
+            database_id=first_db["id"],
+            settings=get_settings(),
+            batch_limit=100,
+        )
+        assert built is not None
+        path, meta = built
+        path.unlink()
+        return collection_id, meta["telegram_chat"]
+
+    _collection_id, backup_target = asyncio.run(collection_and_backup_target())
+    assert backup_target == first_db["telegram_chat_id"]
+
+
 def test_json_db_public_access_rules(app_client: TestClient) -> None:
     _login(app_client)
     raw = app_client.post("/api/v1/keys", json={"label": "rules-test"}).json()["raw"]
@@ -728,9 +851,25 @@ def test_json_db_restore_replays_lcdb1_segment(
     )
 
     settings = get_settings()
+
+    async def default_database_id() -> int:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            return int(
+                (
+                    await sess.execute(
+                        sa.select(JsonCollection.database_id).where(
+                            JsonCollection.owner_user_id == user_id,
+                            JsonCollection.name == "restore_notes",
+                        )
+                    )
+                ).scalar_one()
+            )
+
+    database_id = asyncio.run(default_database_id())
     built = asyncio.run(
         db_backup_mod._build_segment_file(  # type: ignore[attr-defined]
-            owner_user_id=user_id,
+            database_id=database_id,
             settings=settings,
             batch_limit=100,
         )

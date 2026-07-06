@@ -25,7 +25,7 @@ from lcloud.cache import invalidate_files_in_cloud, invalidate_user_quota
 from lcloud.config import get_settings
 from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import get_sessionmaker
-from lcloud.db.models import Cloud, File, StoragePublicKey, User
+from lcloud.db.models import Cloud, File, JsonDatabase, StoragePublicKey, User
 from lcloud.metrics import uploaded_bytes_counter, uploads_counter
 from lcloud.userbot.client import UserbotManager, get_userbot_manager
 from lcloud.userbot.files import delete_file_message, iter_download_file, upload_file_to_cloud
@@ -57,7 +57,8 @@ _public_storage_write_rate = RateLimiter(
 
 
 class StoragePublicKeyIn(BaseModel):
-    cloud_id: int = Field(ge=1)
+    cloud_id: int | None = Field(default=None, ge=1)
+    database_id: int | None = Field(default=None, ge=1)
     label: str = Field(default="", max_length=64)
     allow_upload: bool = True
     allow_list: bool = True
@@ -69,6 +70,8 @@ class StoragePublicKeyIn(BaseModel):
     def validate_permissions(self) -> StoragePublicKeyIn:
         if not any([self.allow_upload, self.allow_list, self.allow_download, self.allow_delete]):
             raise ValueError("at_least_one_permission_required")
+        if self.cloud_id is None and self.database_id is None:
+            raise ValueError("cloud_id_or_database_id_required")
         return self
 
 
@@ -106,6 +109,7 @@ def _enforce_public_storage_rate(request: Request, *, action: str) -> None:
 def _serialize_key(row: StoragePublicKey) -> dict[str, Any]:
     return {
         "id": row.id,
+        "database_id": row.database_id,
         "cloud_id": row.cloud_id,
         "key": row.key,
         "prefix": row.prefix,
@@ -158,18 +162,34 @@ async def _load_public_storage_context(storage_key: str) -> tuple[StoragePublicK
         raise HTTPException(403, detail={"reason": "suspended"})
     if cloud.owner_user_id != row.owner_user_id:
         raise HTTPException(403, detail={"reason": "storage_key_cloud_mismatch"})
+    if row.database_id is not None:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            database = (
+                await sess.execute(
+                    sa.select(JsonDatabase).where(JsonDatabase.id == row.database_id)
+                )
+            ).scalar_one_or_none()
+        if database is None or database.cloud_id != cloud.id:
+            raise HTTPException(403, detail={"reason": "storage_key_database_mismatch"})
     return row, cloud, user
 
 
 @router.get("")
-async def list_storage_public_keys(user: CurrentUser) -> list[dict[str, Any]]:
+async def list_storage_public_keys(
+    user: CurrentUser,
+    database_id: int | None = Query(default=None, ge=1),
+) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
+        query = sa.select(StoragePublicKey).where(StoragePublicKey.owner_user_id == user.id)
+        if database_id is not None:
+            query = query.where(StoragePublicKey.database_id == database_id)
         rows = (
             await sess.execute(
-                sa.select(StoragePublicKey)
-                .where(StoragePublicKey.owner_user_id == user.id)
-                .order_by(StoragePublicKey.created_at.desc(), StoragePublicKey.id.desc())
+                query.order_by(
+                    StoragePublicKey.created_at.desc(), StoragePublicKey.id.desc()
+                )
             )
         ).scalars().all()
     return [_serialize_key(row) for row in rows]
@@ -187,7 +207,27 @@ async def create_storage_public_key(body: StoragePublicKeyIn, user: CurrentUser)
                 "limit": settings.lc_max_file_bytes,
             },
         )
-    await _get_cloud_for_owner(body.cloud_id, user)
+    cloud_id = body.cloud_id
+    if body.database_id is not None:
+        sm = get_sessionmaker()
+        async with sm() as sess:
+            database = (
+                await sess.execute(
+                    sa.select(JsonDatabase).where(
+                        JsonDatabase.id == body.database_id,
+                        JsonDatabase.owner_user_id == user.id,
+                    )
+                )
+            ).scalar_one_or_none()
+        if database is None:
+            raise HTTPException(404, detail={"reason": "database_not_found"})
+        if database.cloud_id is None:
+            raise HTTPException(409, detail={"reason": "database_not_telegram_backed"})
+        if cloud_id is not None and cloud_id != database.cloud_id:
+            raise HTTPException(422, detail={"reason": "database_cloud_mismatch"})
+        cloud_id = database.cloud_id
+    assert cloud_id is not None
+    await _get_cloud_for_owner(cloud_id, user)
 
     sm = get_sessionmaker()
     async with sm() as sess:
@@ -217,8 +257,9 @@ async def create_storage_public_key(body: StoragePublicKeyIn, user: CurrentUser)
             key = _new_storage_public_key()
 
         row = StoragePublicKey(
+            database_id=body.database_id,
             owner_user_id=user.id,
-            cloud_id=body.cloud_id,
+            cloud_id=cloud_id,
             key=key,
             prefix=key[:STORAGE_PUBLIC_KEY_PREFIX_LEN],
             label=body.label.strip(),

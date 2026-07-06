@@ -6,6 +6,7 @@ import type {
   FileRow,
   FilesPage,
   JsonCollectionRow,
+  JsonDatabaseRow,
   JsonDbMeta,
   JsonDbPublicKeyRow,
   JsonStoragePublicKeyRow,
@@ -383,26 +384,42 @@ function enc(v: string): string {
   return encodeURIComponent(v);
 }
 
+function dbPath(path: string, databaseId?: number): string {
+  if (databaseId === undefined) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}database_id=${databaseId}`;
+}
+
 export const jsonDb = {
   meta: () => api<JsonDbMeta>("/api/v1/db/_meta"),
-  listCollections: () => api<JsonCollectionRow[]>("/api/v1/db/collections"),
-  createCollection: (name: string) =>
-    api<JsonCollectionRow>("/api/v1/db/collections", {
+  listDatabases: () => api<JsonDatabaseRow[]>("/api/v1/db/databases"),
+  createDatabase: (name: string) =>
+    api<JsonDatabaseRow>("/api/v1/db/databases", {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
-  listPublicKeys: () => api<JsonDbPublicKeyRow[]>("/api/v1/db/public-keys"),
-  createPublicKey: (label: string) =>
-    api<JsonDbPublicKeyRow>("/api/v1/db/public-keys", {
+  listCollections: (databaseId?: number) =>
+    api<JsonCollectionRow[]>(dbPath("/api/v1/db/collections", databaseId)),
+  createCollection: (name: string, databaseId?: number) =>
+    api<JsonCollectionRow>(dbPath("/api/v1/db/collections", databaseId), {
       method: "POST",
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ name, database_id: databaseId }),
+    }),
+  listPublicKeys: (databaseId?: number) =>
+    api<JsonDbPublicKeyRow[]>(dbPath("/api/v1/db/public-keys", databaseId)),
+  createPublicKey: (label: string, databaseId?: number) =>
+    api<JsonDbPublicKeyRow>(dbPath("/api/v1/db/public-keys", databaseId), {
+      method: "POST",
+      body: JSON.stringify({ label, database_id: databaseId }),
     }),
   revokePublicKey: (id: number) =>
     api<{ ok: boolean }>(`/api/v1/db/public-keys/${id}`, {
       method: "DELETE",
     }),
-  listStorageKeys: () =>
-    api<JsonStoragePublicKeyRow[]>("/api/v1/storage/public-keys"),
+  listStorageKeys: (databaseId?: number) =>
+    api<JsonStoragePublicKeyRow[]>(
+      dbPath("/api/v1/storage/public-keys", databaseId),
+    ),
   createStorageKey: (input: CreateStoragePublicKeyInput) =>
     api<JsonStoragePublicKeyRow>("/api/v1/storage/public-keys", {
       method: "POST",
@@ -412,32 +429,35 @@ export const jsonDb = {
     api<{ ok: boolean }>(`/api/v1/storage/public-keys/${id}`, {
       method: "DELETE",
     }),
-  deleteCollection: (collection: string) =>
-    api<void>(`/api/v1/db/collections/${enc(collection)}`, {
+  deleteCollection: (collection: string, databaseId?: number) =>
+    api<void>(dbPath(`/api/v1/db/collections/${enc(collection)}`, databaseId), {
       method: "DELETE",
     }),
   listDocuments: (
     collection: string,
     params: { limit?: number; offset?: number } = {},
+    databaseId?: number,
   ) => {
     const sp = new URLSearchParams();
     if (params.limit !== undefined) sp.set("limit", String(params.limit));
     if (params.offset !== undefined) sp.set("offset", String(params.offset));
+    if (databaseId !== undefined) sp.set("database_id", String(databaseId));
     const qs = sp.toString();
     return api<JsonDocumentsPage>(
       `/api/v1/db/${enc(collection)}${qs ? `?${qs}` : ""}`,
     );
   },
-  queryDocuments: (collection: string, input: JsonQueryInput) =>
-    api<JsonDocumentsPage>(`/api/v1/db/${enc(collection)}/query`, {
+  queryDocuments: (collection: string, input: JsonQueryInput, databaseId?: number) =>
+    api<JsonDocumentsPage>(dbPath(`/api/v1/db/${enc(collection)}/query`, databaseId), {
       method: "POST",
       body: JSON.stringify(input),
     }),
   createDocument: (
     collection: string,
     input: { id?: string; data: Record<string, unknown> },
+    databaseId?: number,
   ) =>
-    api<JsonDocumentsPage["items"][number]>(`/api/v1/db/${enc(collection)}`, {
+    api<JsonDocumentsPage["items"][number]>(dbPath(`/api/v1/db/${enc(collection)}`, databaseId), {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -445,9 +465,10 @@ export const jsonDb = {
     collection: string,
     id: string,
     data: Record<string, unknown>,
+    databaseId?: number,
   ) =>
     api<JsonDocumentsPage["items"][number]>(
-      `/api/v1/db/${enc(collection)}/${enc(id)}`,
+      dbPath(`/api/v1/db/${enc(collection)}/${enc(id)}`, databaseId),
       {
         method: "PUT",
         body: JSON.stringify({ data }),
@@ -457,39 +478,41 @@ export const jsonDb = {
     collection: string,
     id: string,
     data: Record<string, unknown>,
+    databaseId?: number,
   ) =>
     api<JsonDocumentsPage["items"][number]>(
-      `/api/v1/db/${enc(collection)}/${enc(id)}`,
+      dbPath(`/api/v1/db/${enc(collection)}/${enc(id)}`, databaseId),
       {
         method: "PATCH",
         body: JSON.stringify({ data }),
       },
     ),
-  deleteDocument: (collection: string, id: string) =>
-    api<void>(`/api/v1/db/${enc(collection)}/${enc(id)}`, {
+  deleteDocument: (collection: string, id: string, databaseId?: number) =>
+    api<void>(dbPath(`/api/v1/db/${enc(collection)}/${enc(id)}`, databaseId), {
       method: "DELETE",
     }),
-  getRules: (collection: string) =>
-    api<JsonRulesRow>(`/api/v1/db/collections/${enc(collection)}/rules`),
+  getRules: (collection: string, databaseId?: number) =>
+    api<JsonRulesRow>(dbPath(`/api/v1/db/collections/${enc(collection)}/rules`, databaseId)),
   setRules: (
     collection: string,
     rules: Pick<JsonRulesRow, "read" | "write">,
+    databaseId?: number,
   ) =>
-    api<JsonRulesRow>(`/api/v1/db/collections/${enc(collection)}/rules`, {
+    api<JsonRulesRow>(dbPath(`/api/v1/db/collections/${enc(collection)}/rules`, databaseId), {
       method: "PUT",
       body: JSON.stringify(rules),
     }),
-  getValidator: (collection: string) =>
-    api<JsonValidatorRow>(`/api/v1/db/collections/${enc(collection)}/validator`),
-  setValidator: (collection: string, validator: JsonWriteValidator) =>
-    api<JsonValidatorRow>(`/api/v1/db/collections/${enc(collection)}/validator`, {
+  getValidator: (collection: string, databaseId?: number) =>
+    api<JsonValidatorRow>(dbPath(`/api/v1/db/collections/${enc(collection)}/validator`, databaseId)),
+  setValidator: (collection: string, validator: JsonWriteValidator, databaseId?: number) =>
+    api<JsonValidatorRow>(dbPath(`/api/v1/db/collections/${enc(collection)}/validator`, databaseId), {
       method: "PUT",
       body: JSON.stringify(validator),
     }),
-  deleteValidator: (collection: string) =>
-    api<void>(`/api/v1/db/collections/${enc(collection)}/validator`, {
+  deleteValidator: (collection: string, databaseId?: number) =>
+    api<void>(dbPath(`/api/v1/db/collections/${enc(collection)}/validator`, databaseId), {
       method: "DELETE",
     }),
-  eventsUrl: (collection: string, since = 0) =>
-    `/api/v1/db/${enc(collection)}/events?since=${since}`,
+  eventsUrl: (collection: string, since = 0, databaseId?: number) =>
+    dbPath(`/api/v1/db/${enc(collection)}/events?since=${since}`, databaseId),
 };

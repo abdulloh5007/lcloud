@@ -36,14 +36,17 @@ flags are omitted.
 ```ts
 import { createClient } from "@lcloud/db";
 
-const db = createClient({
+const admin = createClient({
   endpoint: "https://your-lcloud-host",
   apiKey: process.env.LCLOUD_API_KEY,
 });
 
-const meta = await db.meta();
+const meta = await admin.meta();
 console.log(meta.pagination.max_limit, meta.batch.max_writes);
 
+// Creates one Telegram chat that contains this database's media and backups.
+const database = await admin.createDatabase("my-app");
+const db = admin.database(database.id);
 await db.ensureCollection("users");
 
 const users = db.collection("users");
@@ -63,8 +66,8 @@ const admins = await users.query({
 
 console.log(admins.items);
 
-const media = await db.ensureCloud("app-media");
-const uploaded = await db.cloud(media.id).upload(
+if (!database.cloud_id) throw new Error("Database has no Telegram cloud");
+const uploaded = await db.cloud(database.cloud_id).upload(
   new Blob(["hello"], { type: "text/plain" }),
   { name: "hello.txt" },
 );
@@ -74,6 +77,9 @@ await users.update("alice", {
   avatar_url: db.file(uploaded.id).downloadUrl(),
 });
 ```
+
+`admin.database(id)` scopes collection, key, and backup operations. Existing
+unscoped code continues to use the migrated default/legacy database.
 
 ## Two modes: server/admin and browser-only
 
@@ -371,18 +377,19 @@ await pinned.update({ edited: true });
 
 ### Media storage
 
-List or create media clouds:
+Use the selected Database cloud for media. `createDatabase()` creates one
+Telegram chat for JSON backups and media files.
 
 ```ts
-const clouds = await db.listClouds();
-const cloud = await db.createCloud("app-media");
-const existingOrNew = await db.ensureCloud("app-media");
+const database = await admin.createDatabase("my-app");
+const db = admin.database(database.id);
+if (!database.cloud_id) throw new Error("Database has no Telegram cloud");
 ```
 
 Upload a file:
 
 ```ts
-const file = await db.cloud(cloud.id).upload(browserFile, {
+const file = await db.cloud(database.cloud_id).upload(browserFile, {
   compress: true,
   onProgress(progress) {
     console.log(progress.percent);
@@ -394,7 +401,7 @@ In Node 20+:
 
 ```ts
 const blob = new Blob([await readFile("avatar.png")], { type: "image/png" });
-const file = await db.cloud(cloud.id).upload(blob, {
+const file = await db.cloud(database.cloud_id).upload(blob, {
   name: "avatar.png",
   compress: false,
 });
@@ -412,7 +419,7 @@ await db.collection("users").update("alice", {
 List files:
 
 ```ts
-const page = await db.cloud(cloud.id).listFiles({ limit: 50 });
+const page = await db.cloud(database.cloud_id).listFiles({ limit: 50 });
 ```
 
 Delete a file:

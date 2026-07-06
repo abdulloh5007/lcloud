@@ -306,6 +306,9 @@ class JsonCollection(Base):
     __tablename__ = "json_collections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    database_id: Mapped[int] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -322,10 +325,36 @@ class JsonCollection(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "owner_user_id",
+            "database_id",
             "name",
-            name="uq_json_collections_owner_name",
+            name="uq_json_collections_database_name",
         ),
+    )
+
+
+class JsonDatabase(Base):
+    """Top-level DB project backed by one Telegram cloud/chat."""
+
+    __tablename__ = "json_databases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    cloud_id: Mapped[int | None] = mapped_column(
+        ForeignKey("clouds.id", ondelete="SET NULL"), unique=True, nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "name", name="uq_json_databases_owner_name"),
     )
 
 
@@ -339,6 +368,9 @@ class JsonDbPublicKey(Base):
     __tablename__ = "json_db_public_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    database_id: Mapped[int] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -359,6 +391,9 @@ class AppUser(Base):
     __tablename__ = "app_users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    database_id: Mapped[int] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     project_owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -376,9 +411,9 @@ class AppUser(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "project_owner_user_id",
+            "database_id",
             "uid",
-            name="uq_app_users_project_uid",
+            name="uq_app_users_database_uid",
         ),
     )
 
@@ -417,6 +452,9 @@ class StoragePublicKey(Base):
     __tablename__ = "storage_public_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    database_id: Mapped[int | None] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -442,10 +480,13 @@ class StoragePublicKey(Base):
 class JsonBackupState(Base):
     """Per-user JSON DB Telegram backup cursor."""
 
-    __tablename__ = "json_backup_state"
+    __tablename__ = "json_database_backup_state"
 
+    database_id: Mapped[int] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), primary_key=True
+    )
     owner_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     last_operation_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
@@ -459,6 +500,9 @@ class JsonBackupSegment(Base):
     __tablename__ = "json_backup_segments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    database_id: Mapped[int] = mapped_column(
+        ForeignKey("json_databases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     owner_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -481,10 +525,10 @@ class JsonBackupSegment(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "owner_user_id",
+            "database_id",
             "first_operation_id",
             "last_operation_id",
-            name="uq_json_backup_segments_owner_range",
+            name="uq_json_backup_segments_database_range",
         ),
     )
 

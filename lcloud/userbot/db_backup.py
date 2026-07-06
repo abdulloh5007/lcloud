@@ -18,7 +18,14 @@ from telethon.tl.types import DocumentAttributeFilename
 
 from lcloud.config import Settings, get_settings
 from lcloud.db.base import get_sessionmaker
-from lcloud.db.models import JsonBackupSegment, JsonBackupState, JsonCollection, JsonOperation
+from lcloud.db.models import (
+    Cloud,
+    JsonBackupSegment,
+    JsonBackupState,
+    JsonCollection,
+    JsonDatabase,
+    JsonOperation,
+)
 from lcloud.userbot.client import UserbotManager, get_userbot_manager
 
 logger = logging.getLogger(__name__)
@@ -80,11 +87,11 @@ class JsonDbBackupWorker:
         if not await self.manager.is_admin_authorized():
             return 0
 
-        owner_ids = await _owners_with_pending_operations(self.batch_limit)
+        database_ids = await _databases_with_pending_operations(self.batch_limit)
         uploaded = 0
-        for owner_user_id in owner_ids:
+        for database_id in database_ids:
             segment = await _build_segment_file(
-                owner_user_id=owner_user_id,
+                database_id=database_id,
                 settings=self.settings,
                 batch_limit=self.batch_limit,
             )
@@ -150,7 +157,9 @@ async def run_json_db_backup_once(settings: Settings | None = None) -> int:
     return await worker.backup_once()
 
 
-async def get_json_db_backup_status(owner_user_id: int) -> dict[str, Any]:
+async def get_json_db_backup_status(
+    owner_user_id: int, database_id: int
+) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:
         latest_local = (
@@ -158,20 +167,23 @@ async def get_json_db_backup_status(owner_user_id: int) -> dict[str, Any]:
                 sa.select(sa.func.coalesce(sa.func.max(JsonOperation.id), 0))
                 .select_from(JsonOperation)
                 .join(JsonCollection, JsonCollection.id == JsonOperation.collection_id)
-                .where(JsonCollection.owner_user_id == owner_user_id)
+                .where(
+                    JsonCollection.owner_user_id == owner_user_id,
+                    JsonCollection.database_id == database_id,
+                )
             )
         ).scalar_one()
         state = (
             await sess.execute(
                 sa.select(JsonBackupState).where(
-                    JsonBackupState.owner_user_id == owner_user_id
+                    JsonBackupState.database_id == database_id
                 )
             )
         ).scalar_one_or_none()
         last_segment = (
             await sess.execute(
                 sa.select(JsonBackupSegment)
-                .where(JsonBackupSegment.owner_user_id == owner_user_id)
+                .where(JsonBackupSegment.database_id == database_id)
                 .order_by(JsonBackupSegment.last_operation_id.desc(), JsonBackupSegment.id.desc())
                 .limit(1)
             )
@@ -181,7 +193,8 @@ async def get_json_db_backup_status(owner_user_id: int) -> dict[str, Any]:
     return {
         "enabled": get_settings().lc_json_db_backup_enabled,
         "format": BACKUP_FORMAT,
-        "target": "telegram_saved_messages",
+        "database_id": database_id,
+        "target": "database_telegram_chat",
         "last_local_operation_id": int(latest_local or 0),
         "last_backed_up_operation_id": int(backed_up),
         "lag_operations": max(0, int(latest_local or 0) - int(backed_up)),
@@ -193,6 +206,7 @@ async def get_json_db_backup_status(owner_user_id: int) -> dict[str, Any]:
 def _serialize_segment(row: JsonBackupSegment) -> dict[str, Any]:
     return {
         "id": row.id,
+        "database_id": row.database_id,
         "owner_user_id": row.owner_user_id,
         "first_operation_id": row.first_operation_id,
         "last_operation_id": row.last_operation_id,
@@ -209,22 +223,22 @@ def _serialize_segment(row: JsonBackupSegment) -> dict[str, Any]:
     }
 
 
-async def _owners_with_pending_operations(limit: int) -> list[int]:
+async def _databases_with_pending_operations(limit: int) -> list[int]:
     sm = get_sessionmaker()
     async with sm() as sess:
         rows = (
             await sess.execute(
-                sa.select(JsonCollection.owner_user_id)
+                sa.select(JsonCollection.database_id)
                 .join(JsonOperation, JsonOperation.collection_id == JsonCollection.id)
                 .outerjoin(
                     JsonBackupState,
-                    JsonBackupState.owner_user_id == JsonCollection.owner_user_id,
+                    JsonBackupState.database_id == JsonCollection.database_id,
                 )
                 .where(
                     JsonOperation.id
                     > sa.func.coalesce(JsonBackupState.last_operation_id, 0)
                 )
-                .group_by(JsonCollection.owner_user_id)
+                .group_by(JsonCollection.database_id)
                 .order_by(sa.func.min(JsonOperation.id).asc())
                 .limit(limit)
             )
@@ -234,7 +248,7 @@ async def _owners_with_pending_operations(limit: int) -> list[int]:
 
 async def _build_segment_file(
     *,
-    owner_user_id: int,
+    database_id: int,
     settings: Settings,
     batch_limit: int,
 ) -> tuple[Path, dict[str, Any]] | None:
@@ -243,7 +257,7 @@ async def _build_segment_file(
         state = (
             await sess.execute(
                 sa.select(JsonBackupState).where(
-                    JsonBackupState.owner_user_id == owner_user_id
+                    JsonBackupState.database_id == database_id
                 )
             )
         ).scalar_one_or_none()
@@ -253,13 +267,25 @@ async def _build_segment_file(
                 sa.select(JsonOperation, JsonCollection)
                 .join(JsonCollection, JsonCollection.id == JsonOperation.collection_id)
                 .where(
-                    JsonCollection.owner_user_id == owner_user_id,
+                    JsonCollection.database_id == database_id,
                     JsonOperation.id > last_uploaded,
                 )
                 .order_by(JsonOperation.id.asc())
                 .limit(batch_limit)
             )
         ).all()
+        database = (
+            await sess.execute(
+                sa.select(JsonDatabase).where(JsonDatabase.id == database_id)
+            )
+        ).scalar_one()
+        telegram_chat: int | str = "me"
+        if database.cloud_id is not None:
+            cloud = (
+                await sess.execute(sa.select(Cloud).where(Cloud.id == database.cloud_id))
+            ).scalar_one_or_none()
+            if cloud is not None:
+                telegram_chat = cloud.chat_id
 
     if not rows:
         return None
@@ -274,6 +300,7 @@ async def _build_segment_file(
                 "collection_id": operation.collection_id,
                 "collection": {
                     "id": collection.id,
+                    "database_id": collection.database_id,
                     "owner_user_id": collection.owner_user_id,
                     "name": collection.name,
                     "read_rule": collection.read_rule,
@@ -292,7 +319,9 @@ async def _build_segment_file(
 
     meta = {
         "format": BACKUP_FORMAT,
-        "owner_user_id": owner_user_id,
+        "database_id": database_id,
+        "owner_user_id": database.owner_user_id,
+        "telegram_chat": telegram_chat,
         "first_operation_id": first_id,
         "last_operation_id": last_id,
         "operation_count": len(operations),
@@ -305,7 +334,7 @@ async def _build_segment_file(
     meta["sha256"] = sha
     meta["size_bytes"] = len(compressed)
     filename = (
-        f"lcloud-db-user-{owner_user_id}-ops-{first_id}-{last_id}-"
+        f"lcloud-db-{database_id}-ops-{first_id}-{last_id}-"
         f"{uuid.uuid4().hex[:8]}.json.gz"
     )
     path = settings.data_dir / "tmp" / filename
@@ -321,6 +350,7 @@ async def _upload_segment_file(
 ) -> int:
     caption_meta = {
         "f": BACKUP_FORMAT,
+        "d": meta["database_id"],
         "u": meta["owner_user_id"],
         "a": meta["first_operation_id"],
         "b": meta["last_operation_id"],
@@ -328,7 +358,7 @@ async def _upload_segment_file(
         "h": meta["sha256"],
     }
     msg = await manager.client.send_file(
-        "me",
+        meta["telegram_chat"],
         file=str(path),
         force_document=True,
         caption=f"{BACKUP_CAPTION_PREFIX}{_json_dumps(caption_meta)}",
@@ -341,11 +371,12 @@ async def _mark_segment_uploaded(*, meta: dict[str, Any], message_id: int) -> No
     sm = get_sessionmaker()
     async with sm() as sess:
         row = JsonBackupSegment(
+            database_id=int(meta["database_id"]),
             owner_user_id=int(meta["owner_user_id"]),
             first_operation_id=int(meta["first_operation_id"]),
             last_operation_id=int(meta["last_operation_id"]),
             operation_count=int(meta["operation_count"]),
-            telegram_chat="me",
+            telegram_chat=str(meta["telegram_chat"]),
             telegram_message_id=message_id,
             sha256=str(meta["sha256"]),
             size_bytes=int(meta["size_bytes"]),
@@ -357,12 +388,13 @@ async def _mark_segment_uploaded(*, meta: dict[str, Any], message_id: int) -> No
         state = (
             await sess.execute(
                 sa.select(JsonBackupState).where(
-                    JsonBackupState.owner_user_id == int(meta["owner_user_id"])
+                    JsonBackupState.database_id == int(meta["database_id"])
                 )
             )
         ).scalar_one_or_none()
         if state is None:
             state = JsonBackupState(
+                database_id=int(meta["database_id"]),
                 owner_user_id=int(meta["owner_user_id"]),
                 last_operation_id=int(meta["last_operation_id"]),
             )

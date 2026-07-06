@@ -40,6 +40,7 @@ class AppIdentity:
     id: int
     uid: str
     project_owner_user_id: int
+    database_id: int
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ def _issue_access_token(user: AppUser) -> str:
         "kind": "app_access",
         "app_user_id": user.id,
         "project_owner_user_id": user.project_owner_user_id,
+        "database_id": user.database_id,
         "provider": user.provider,
         "iat": now,
         "exp": now + ACCESS_TOKEN_TTL_SECONDS,
@@ -87,6 +89,7 @@ def _decode_access_token(token: str) -> AppIdentity:
         id=int(payload["app_user_id"]),
         uid=str(payload["sub"]),
         project_owner_user_id=int(payload["project_owner_user_id"]),
+        database_id=int(payload.get("database_id", 0)),
     )
 
 
@@ -178,6 +181,7 @@ async def sign_in_anonymously(
     sm = get_sessionmaker()
     async with sm() as sess:
         user = AppUser(
+            database_id=project.database_id,
             project_owner_user_id=project.owner_user_id,
             uid=f"anon_{secrets.token_urlsafe(18)}",
             provider="anonymous",
@@ -223,6 +227,7 @@ async def refresh_session(
             or _as_utc(session.expires_at) <= now
             or user.disabled_at is not None
             or user.project_owner_user_id != project.owner_user_id
+            or user.database_id != project.database_id
         ):
             raise HTTPException(401, detail={"reason": "invalid_refresh_token"})
 
@@ -256,7 +261,10 @@ async def sign_out(
         pair = result.one_or_none()
         if pair is not None:
             session, user = pair
-            if user.project_owner_user_id == project.owner_user_id:
+            if (
+                user.project_owner_user_id == project.owner_user_id
+                and user.database_id == project.database_id
+            ):
                 session.revoked_at = _now()
                 await sess.commit()
     return Response(status_code=204)
@@ -269,7 +277,11 @@ async def app_auth_me(
 ) -> dict[str, Any]:
     project = await _project_for_key(publishable_key)
     user = principal.app_user
-    if user is None or user.project_owner_user_id != project.owner_user_id:
+    if (
+        user is None
+        or user.project_owner_user_id != project.owner_user_id
+        or user.database_id != project.database_id
+    ):
         raise HTTPException(401, detail={"reason": "app_auth_required"})
     return {"uid": user.uid, "provider": "anonymous", "is_anonymous": True}
 

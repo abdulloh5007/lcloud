@@ -8,6 +8,7 @@ export interface HttpClientOptions {
   fetch?: typeof fetch;
   credentials?: RequestCredentials;
   accessToken?: () => Promise<string | null>;
+  databaseId?: number;
 }
 
 export class HttpClient {
@@ -16,6 +17,7 @@ export class HttpClient {
   private readonly fetchImpl: typeof fetch;
   private readonly credentials: RequestCredentials;
   private readonly accessToken?: () => Promise<string | null>;
+  private readonly databaseId?: number;
 
   constructor(options: HttpClientOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
@@ -23,6 +25,7 @@ export class HttpClient {
     this.fetchImpl = options.fetch ?? fetch;
     this.credentials = options.credentials ?? "include";
     this.accessToken = options.accessToken;
+    this.databaseId = options.databaseId;
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -45,7 +48,16 @@ export class HttpClient {
   }
 
   url(path: string): string {
-    return `${this.endpoint}${path}`;
+    const url = new URL(path, `${this.endpoint}/`);
+    if (
+      this.databaseId !== undefined &&
+      (url.pathname.startsWith("/api/v1/db/") ||
+        url.pathname === "/api/v1/storage/public-keys") &&
+      url.pathname !== "/api/v1/db/_meta"
+    ) {
+      url.searchParams.set("database_id", String(this.databaseId));
+    }
+    return url.toString();
   }
 
   uploadWithXhr(

@@ -11,6 +11,7 @@ import type {
   CollectionRow,
   CollectionRules,
   CollectionValidator,
+  DatabaseRow,
   CreateStoragePublicKeyInput,
   DbPublicKeyRow,
   FileRow,
@@ -28,9 +29,26 @@ import { appendUploadFields, encodePath, listQuery } from "../utils.js";
 
 export class LCloudDbClient {
   private readonly http: HttpClient;
+  private readonly options: LCloudDbOptions;
 
   constructor(options: LCloudDbOptions) {
+    this.options = options;
     this.http = new HttpClient(options);
+  }
+
+  database(id: number): LCloudDbClient {
+    return new LCloudDbClient({ ...this.options, databaseId: id });
+  }
+
+  async listDatabases(): Promise<DatabaseRow[]> {
+    return this.request("/api/v1/db/databases");
+  }
+
+  async createDatabase(name: string): Promise<DatabaseRow> {
+    return this.request("/api/v1/db/databases", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
   }
 
   collection<T extends JsonObject = JsonObject>(name: string): CollectionRef<T> {
@@ -86,7 +104,10 @@ export class LCloudDbClient {
   async createStorageKey(input: CreateStoragePublicKeyInput): Promise<StoragePublicKeyRow> {
     return this.request("/api/v1/storage/public-keys", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        database_id: input.database_id ?? this.options.databaseId,
+      }),
     });
   }
 

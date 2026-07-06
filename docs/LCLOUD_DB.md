@@ -3,9 +3,8 @@
 LCloud DB is a JSON document database API built into LCloud. It gives apps a
 Firebase/Supabase-like developer experience while storing the materialized
 index in LCloud's database and writing every change to an append-only JSON
-operation log designed for future Telegram snapshot/segment persistence. The
-JavaScript SDK also includes media storage helpers for uploading files/photos/
-videos to LCloud's Telegram-backed file storage.
+operation log backed up to Telegram. Every Database owns one Telegram chat;
+its JSON backups and uploaded files/photos/videos are stored in that chat.
 
 Current status: MVP document database. Good for small apps, dashboards, bots,
 personal tools, CMS-like content, and prototypes that need a simple hosted JSON
@@ -25,17 +24,39 @@ complex analytics, or transactional financial systems.
 
 ## Storage model
 
-LCloud DB uses three tables:
+The hierarchy is:
+
+```text
+Database -> Telegram chat
+  Collections -> JSON documents
+  Media -> files/photos/videos
+  Keys -> lcpk_ and lstore_
+  Backups -> compressed operation segments in the same chat
+```
+
+Core tables:
 
 | Table | Purpose |
 | --- | --- |
-| `json_collections` | Per-user collection namespace |
+| `json_databases` | Top-level project linked to one Telegram cloud/chat |
+| `json_collections` | Collection namespace inside one database |
 | `json_documents` | Current materialized document state |
-| `json_operations` | Append-only oplog for replay, audit, and future Telegram JSONL segments |
+| `json_operations` | Append-only oplog for replay, audit, and Telegram backup segments |
 
-The API surface should remain stable when Telegram-backed snapshot flushing is
-added later. Apps should treat the HTTP API and SDK as the contract, not the SQL
-tables.
+Apps should treat the HTTP API and SDK as the contract, not the SQL tables.
+
+Create and select a database before creating collections:
+
+```ts
+const admin = createClient({ endpoint, apiKey });
+const project = await admin.createDatabase("website");
+const db = admin.database(project.id);
+await db.ensureCollection("posts");
+```
+
+Creating the database creates its Telegram chat. `project.cloud_id` is used by
+server-side media helpers; browser storage keys created through the scoped
+client automatically use that same cloud.
 
 ## Authentication
 
@@ -58,15 +79,16 @@ proxy.
 
 This is the Supabase/Firebase-style mode for a plain static website:
 
-1. In DB Console or a trusted admin script, create a collection.
-2. In DB Console -> Keys, create a publishable DB key (`lcpk_...`).
-3. Set access rules:
+1. In DB Console or a trusted admin script, create/select a Database.
+2. Create a collection inside that Database.
+3. In DB Console -> Keys, create a publishable DB key (`lcpk_...`).
+4. Set access rules:
    - public read site: `{ "read": "public", "write": "owner" }`
    - public form: `{ "read": "owner", "write": "public" }`
    - private per-user data: `{ "read": "document_owner", "write": "document_owner" }`
-4. For public writes, set a validator with `max_bytes`, `max_fields`,
+5. For public writes, set a validator with `max_bytes`, `max_fields`,
    `required_fields`, and `allowed_fields`.
-5. In frontend code use `createBrowserClient()` with `publishableKey`.
+6. In frontend code use `createBrowserClient()` with `publishableKey`.
 
 Frontend `.env` values are not secret. Vite/Next/browser builds expose them in
 JavaScript. Do not use `LCLOUD_API_KEY` in frontend `.env`. LCloud API keys are
@@ -237,8 +259,9 @@ python -m lcloud.userbot.db_restore --target-user-id 1
 systemctl start lcloud.service
 ```
 
-Use `--source-user-id OLD_ID` when restoring only one old owner namespace from
-Saved Messages. `--target-user-id` is the local user that will own restored
+Use `--chat-id TELEGRAM_CHAT_ID` when restoring from a specific Database chat,
+and `--source-database-id OLD_DATABASE_ID` when that chat contains multiple
+backup streams. `--target-user-id` is the local user that will own restored
 collections on the new VPS.
 
 ## REST API
@@ -572,12 +595,16 @@ none of the writes are saved.
 
 ### SDK media storage
 
-The same SDK can upload media/files through the existing LCloud file API:
+The same SDK can upload media/files through the existing LCloud file API. Use
+the selected Database cloud so JSON data, media, keys, and backups stay in the
+same Telegram chat:
 
 ```ts
-const mediaCloud = await db.ensureCloud("app-media");
+const database = await admin.createDatabase("website");
+const db = admin.database(database.id);
+if (!database.cloud_id) throw new Error("Database has no Telegram cloud");
 
-const uploaded = await db.cloud(mediaCloud.id).upload(fileOrBlob, {
+const uploaded = await db.cloud(database.cloud_id).upload(fileOrBlob, {
   name: "avatar.png",
   compress: true,
   onProgress(progress) {
@@ -594,16 +621,17 @@ await db.collection("users").update("alice", {
 Available media methods:
 
 ```ts
-await db.listClouds();
-await db.createCloud("app-media");
-await db.ensureCloud("app-media");
-await db.deleteCloud(cloudId);
+const databases = await db.listDatabases();
+const database = await db.createDatabase("app");
+const scoped = db.database(database.id);
+const cloudId = database.cloud_id;
+if (!cloudId) throw new Error("Database has no Telegram cloud");
 
-await db.cloud(cloudId).listFiles({ limit: 50, offset: 0 });
-await db.cloud(cloudId).upload(fileOrBlob, { name: "photo.jpg", compress: true });
+await scoped.cloud(cloudId).listFiles({ limit: 50, offset: 0 });
+await scoped.cloud(cloudId).upload(fileOrBlob, { name: "photo.jpg", compress: true });
 
-db.file(fileId).downloadUrl();
-await db.file(fileId).delete();
+scoped.file(fileId).downloadUrl();
+await scoped.file(fileId).delete();
 ```
 
 The REST media/file API remains unchanged. SDK media helpers are a convenience

@@ -21,6 +21,7 @@ from lcloud.db.models import (
     JsonBackupSegment,
     JsonBackupState,
     JsonCollection,
+    JsonDatabase,
     JsonDocument,
     JsonOperation,
     User,
@@ -80,19 +81,23 @@ def parse_lcdb1_caption(text: str) -> dict[str, Any] | None:
 async def discover_lcdb1_segments(
     client: Any,
     *,
+    entity: Any = "me",
     source_owner_user_id: int | None = None,
+    source_database_id: int | None = None,
     limit: int | None = None,
 ) -> list[TelegramBackupSegment]:
     segments: list[TelegramBackupSegment] = []
     kwargs: dict[str, Any] = {}
     if limit is not None:
         kwargs["limit"] = limit
-    async for message in client.iter_messages("me", search=BACKUP_CAPTION_PREFIX, **kwargs):
+    async for message in client.iter_messages(entity, search=BACKUP_CAPTION_PREFIX, **kwargs):
         meta = parse_lcdb1_caption(_message_text(message))
         if meta is None:
             continue
         owner = int(meta["u"])
         if source_owner_user_id is not None and owner != source_owner_user_id:
+            continue
+        if source_database_id is not None and int(meta.get("d", 0)) != source_database_id:
             continue
         compressed = await client.download_media(message, file=bytes)
         if not isinstance(compressed, bytes):
@@ -158,13 +163,17 @@ async def restore_json_db_from_telegram(
     client: Any,
     *,
     target_owner_user_id: int,
+    entity: Any = "me",
     source_owner_user_id: int | None = None,
+    source_database_id: int | None = None,
     dry_run: bool = False,
     limit: int | None = None,
 ) -> RestoreResult:
     segments = await discover_lcdb1_segments(
         client,
+        entity=entity,
         source_owner_user_id=source_owner_user_id,
+        source_database_id=source_database_id,
         limit=limit,
     )
     return await restore_json_db_segments(
@@ -204,6 +213,22 @@ async def restore_json_db_segments(
         ).scalar_one_or_none()
         if exists is None:
             raise RestoreError(f"target user id {target_owner_user_id} does not exist")
+        database = (
+            await sess.execute(
+                sa.select(JsonDatabase)
+                .where(JsonDatabase.owner_user_id == target_owner_user_id)
+                .order_by(JsonDatabase.is_default.desc(), JsonDatabase.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if database is None:
+            database = JsonDatabase(
+                owner_user_id=target_owner_user_id,
+                name="Restored database",
+                is_default=True,
+            )
+            sess.add(database)
+            await sess.flush()
 
         collection_map: dict[int, JsonCollection] = {}
         restored_operations = 0
@@ -214,7 +239,9 @@ async def restore_json_db_segments(
             old_collection_id = int(collection["id"])
             coll = collection_map.get(old_collection_id)
             if coll is None:
-                coll = await _ensure_collection(sess, target_owner_user_id, collection)
+                coll = await _ensure_collection(
+                    sess, target_owner_user_id, database.id, collection
+                )
                 collection_map[old_collection_id] = coll
             await _replay_operation(sess, coll, raw)
             restored_operations += 1
@@ -230,15 +257,20 @@ async def restore_json_db_segments(
             )
 
         for segment in segments:
-            await _record_restored_segment(sess, segment, target_owner_user_id)
+            await _record_restored_segment(
+                sess, segment, target_owner_user_id, database.id
+            )
         state = (
             await sess.execute(
-                sa.select(JsonBackupState).where(JsonBackupState.owner_user_id == target_owner_user_id)
+                sa.select(JsonBackupState).where(
+                    JsonBackupState.database_id == database.id
+                )
             )
         ).scalar_one_or_none()
         if state is None:
             sess.add(
                 JsonBackupState(
+                    database_id=database.id,
                     owner_user_id=target_owner_user_id,
                     last_operation_id=last_id,
                 )
@@ -260,6 +292,7 @@ async def restore_json_db_segments(
 async def _ensure_collection(
     sess: Any,
     target_owner_user_id: int,
+    database_id: int,
     collection: dict[str, Any],
 ) -> JsonCollection:
     name = str(collection["name"])
@@ -267,12 +300,17 @@ async def _ensure_collection(
         await sess.execute(
             sa.select(JsonCollection).where(
                 JsonCollection.owner_user_id == target_owner_user_id,
+                JsonCollection.database_id == database_id,
                 JsonCollection.name == name,
             )
         )
     ).scalar_one_or_none()
     if row is None:
-        row = JsonCollection(owner_user_id=target_owner_user_id, name=name)
+        row = JsonCollection(
+            database_id=database_id,
+            owner_user_id=target_owner_user_id,
+            name=name,
+        )
         sess.add(row)
         await sess.flush()
     row.read_rule = str(collection.get("read_rule") or "owner")
@@ -409,11 +447,12 @@ async def _record_restored_segment(
     sess: Any,
     segment: TelegramBackupSegment,
     target_owner_user_id: int,
+    database_id: int,
 ) -> None:
     existing = (
         await sess.execute(
             sa.select(JsonBackupSegment).where(
-                JsonBackupSegment.owner_user_id == target_owner_user_id,
+                JsonBackupSegment.database_id == database_id,
                 JsonBackupSegment.first_operation_id == segment.first_operation_id,
                 JsonBackupSegment.last_operation_id == segment.last_operation_id,
             )
@@ -423,6 +462,7 @@ async def _record_restored_segment(
         return
     sess.add(
         JsonBackupSegment(
+            database_id=database_id,
             owner_user_id=target_owner_user_id,
             first_operation_id=segment.first_operation_id,
             last_operation_id=segment.last_operation_id,
@@ -451,7 +491,9 @@ async def _amain(args: argparse.Namespace) -> int:
         result = await restore_json_db_from_telegram(
             manager.client,
             target_owner_user_id=args.target_user_id,
+            entity=args.chat_id if args.chat_id is not None else "me",
             source_owner_user_id=args.source_user_id,
+            source_database_id=args.source_database_id,
             dry_run=args.dry_run,
             limit=args.limit,
         )
@@ -476,6 +518,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Restore LCloud JSON DB from Telegram LCDB1 segments")
     parser.add_argument("--target-user-id", type=int, required=True)
     parser.add_argument("--source-user-id", type=int, default=None)
+    parser.add_argument("--source-database-id", type=int, default=None)
+    parser.add_argument("--chat-id", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

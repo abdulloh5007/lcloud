@@ -92,6 +92,7 @@ export interface JsonWriteValidator {
 
 export interface JsonCollectionRow {
   id: number;
+  database_id: number;
   name: string;
   owner_user_id: number;
   read_rule: JsonAccessRule;
@@ -103,6 +104,7 @@ export interface JsonCollectionRow {
 
 export interface JsonDbPublicKeyRow {
   id: number;
+  database_id: number;
   key: string;
   prefix: string;
   label: string;
@@ -112,6 +114,7 @@ export interface JsonDbPublicKeyRow {
 
 export interface JsonStoragePublicKeyRow {
   id: number;
+  database_id: number | null;
   cloud_id: number;
   key: string;
   prefix: string;
@@ -126,13 +129,27 @@ export interface JsonStoragePublicKeyRow {
 }
 
 export interface CreateStoragePublicKeyInput {
-  cloud_id: number;
+  cloud_id?: number;
+  database_id?: number;
   label?: string;
   allow_upload?: boolean;
   allow_list?: boolean;
   allow_download?: boolean;
   allow_delete?: boolean;
   max_file_bytes?: number | null;
+}
+
+export interface JsonDatabaseRow {
+  id: number;
+  name: string;
+  owner_user_id: number;
+  cloud_id: number | null;
+  telegram_chat_id: number | null;
+  telegram_backed: boolean;
+  is_default: boolean;
+  collection_count: number;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface JsonDocumentRow {

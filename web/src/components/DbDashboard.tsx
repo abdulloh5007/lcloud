@@ -9,6 +9,7 @@ import {
   Database,
   FileJson,
   Globe2,
+  HardDrive,
   KeyRound,
   Plus,
   UploadCloud,
@@ -18,7 +19,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, clouds, jsonDb } from "@/api/client";
+import { ApiError, jsonDb } from "@/api/client";
 import type {
   JsonAccessRule,
   JsonCollectionRow,
@@ -32,6 +33,7 @@ import type {
 } from "@/api/types";
 import { classNames, formatDate } from "@/lib/format";
 import { Button } from "./ui/Button";
+import { FilesPanel } from "./FilesPanel";
 
 const PAGE_LIMIT = 50;
 const EMPTY_DOC = "{\n  \n}";
@@ -45,11 +47,12 @@ const RULES: Array<{ value: JsonAccessRule; label: string }> = [
 const OPS: JsonWhereOp[] = ["==", "!=", "<", "<=", ">", ">=", "contains", "startsWith"];
 
 type WriteMode = "create" | "set" | "patch";
-type DbPage = "documents" | "editor" | "rules" | "keys" | "events";
+type DbPage = "documents" | "editor" | "media" | "rules" | "keys" | "events";
 
 const DB_PAGES: Array<{ id: DbPage; label: string; icon: LucideIcon }> = [
   { id: "documents", label: "Documents", icon: FileJson },
   { id: "editor", label: "Editor", icon: Braces },
+  { id: "media", label: "Media", icon: HardDrive },
   { id: "rules", label: "Rules", icon: Globe2 },
   { id: "keys", label: "Keys", icon: KeyRound },
   { id: "events", label: "Events", icon: Activity },
@@ -93,6 +96,7 @@ function errorText(e: unknown): string {
 
 export function DbDashboard() {
   const qc = useQueryClient();
+  const [selectedDatabaseId, setSelectedDatabaseId] = useState<number | null>(null);
   const [selectedName, setSelectedName] = useState<string>("");
   const [newCollection, setNewCollection] = useState("");
   const [createCollectionError, setCreateCollectionError] = useState<string | null>(null);
@@ -120,7 +124,6 @@ export function DbDashboard() {
   const [activePage, setActivePage] = useState<DbPage>("documents");
   const [newPublicKeyLabel, setNewPublicKeyLabel] = useState("");
   const [newStorageKeyLabel, setNewStorageKeyLabel] = useState("");
-  const [selectedStorageCloudId, setSelectedStorageCloudId] = useState<string>("");
   const [storageMaxBytes, setStorageMaxBytes] = useState("10485760");
   const [storageAllowUpload, setStorageAllowUpload] = useState(true);
   const [storageAllowList, setStorageAllowList] = useState(true);
@@ -128,9 +131,26 @@ export function DbDashboard() {
   const [storageAllowDelete, setStorageAllowDelete] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  const databasesQ = useQuery({
+    queryKey: ["json-db", "databases"],
+    queryFn: () => jsonDb.listDatabases(),
+  });
+
+  useEffect(() => {
+    const rows = databasesQ.data ?? [];
+    if (rows.length === 0) {
+      setSelectedDatabaseId(null);
+      return;
+    }
+    if (selectedDatabaseId === null || !rows.some((row) => row.id === selectedDatabaseId)) {
+      setSelectedDatabaseId(rows[0].id);
+    }
+  }, [databasesQ.data, selectedDatabaseId]);
+
   const collectionsQ = useQuery({
-    queryKey: ["json-db", "collections"],
-    queryFn: () => jsonDb.listCollections(),
+    queryKey: ["json-db", selectedDatabaseId, "collections"],
+    enabled: selectedDatabaseId !== null,
+    queryFn: () => jsonDb.listCollections(selectedDatabaseId ?? undefined),
   });
 
   const metaQ = useQuery({
@@ -142,6 +162,11 @@ export function DbDashboard() {
   const selectedCollection = useMemo(
     () => (collectionsQ.data ?? []).find((c) => c.name === selectedName) ?? null,
     [collectionsQ.data, selectedName],
+  );
+  const selectedDatabase = useMemo(
+    () =>
+      (databasesQ.data ?? []).find((row) => row.id === selectedDatabaseId) ?? null,
+    [databasesQ.data, selectedDatabaseId],
   );
 
   useEffect(() => {
@@ -156,8 +181,8 @@ export function DbDashboard() {
   }, [collectionsQ.data, selectedName]);
 
   const documentsQ = useQuery({
-    queryKey: ["json-db", "documents", selectedName, queryInput],
-    enabled: Boolean(selectedName),
+    queryKey: ["json-db", selectedDatabaseId, "documents", selectedName, queryInput],
+    enabled: Boolean(selectedName && selectedDatabaseId),
     queryFn: () => {
       if (!selectedName) {
         return Promise.resolve({ items: [], total: 0, limit: PAGE_LIMIT, offset: 0 });
@@ -167,37 +192,38 @@ export function DbDashboard() {
           ...queryInput,
           limit: PAGE_LIMIT,
           offset: 0,
-        });
+        }, selectedDatabaseId ?? undefined);
       }
-      return jsonDb.listDocuments(selectedName, { limit: PAGE_LIMIT, offset: 0 });
+      return jsonDb.listDocuments(
+        selectedName,
+        { limit: PAGE_LIMIT, offset: 0 },
+        selectedDatabaseId ?? undefined,
+      );
     },
   });
 
   const rulesQ = useQuery({
-    queryKey: ["json-db", "rules", selectedName],
-    enabled: Boolean(selectedName),
-    queryFn: () => jsonDb.getRules(selectedName),
+    queryKey: ["json-db", selectedDatabaseId, "rules", selectedName],
+    enabled: Boolean(selectedName && selectedDatabaseId),
+    queryFn: () => jsonDb.getRules(selectedName, selectedDatabaseId ?? undefined),
   });
 
   const validatorQ = useQuery({
-    queryKey: ["json-db", "validator", selectedName],
-    enabled: Boolean(selectedName),
-    queryFn: () => jsonDb.getValidator(selectedName),
+    queryKey: ["json-db", selectedDatabaseId, "validator", selectedName],
+    enabled: Boolean(selectedName && selectedDatabaseId),
+    queryFn: () => jsonDb.getValidator(selectedName, selectedDatabaseId ?? undefined),
   });
 
   const publicKeysQ = useQuery({
-    queryKey: ["json-db", "public-keys"],
-    queryFn: () => jsonDb.listPublicKeys(),
+    queryKey: ["json-db", selectedDatabaseId, "public-keys"],
+    enabled: selectedDatabaseId !== null,
+    queryFn: () => jsonDb.listPublicKeys(selectedDatabaseId ?? undefined),
   });
 
   const storageKeysQ = useQuery({
-    queryKey: ["json-db", "storage-public-keys"],
-    queryFn: () => jsonDb.listStorageKeys(),
-  });
-
-  const cloudsQ = useQuery({
-    queryKey: ["clouds"],
-    queryFn: () => clouds.list(),
+    queryKey: ["json-db", selectedDatabaseId, "storage-public-keys"],
+    enabled: selectedDatabaseId !== null,
+    queryFn: () => jsonDb.listStorageKeys(selectedDatabaseId ?? undefined),
   });
 
   useEffect(() => {
@@ -223,40 +249,53 @@ export function DbDashboard() {
     setDocError(null);
     setEvents([]);
     setLastEventId(0);
-  }, [selectedName]);
+  }, [selectedName, selectedDatabaseId]);
 
   useEffect(() => {
     if (!selectedName) return;
-    const source = new EventSource(jsonDb.eventsUrl(selectedName, 0));
+    const source = new EventSource(
+      jsonDb.eventsUrl(selectedName, 0, selectedDatabaseId ?? undefined),
+    );
     const onChange = (event: MessageEvent<string>) => {
       try {
         const parsed = JSON.parse(event.data) as JsonDbEvent;
         setLastEventId(parsed.id);
         setEvents((current) => [parsed, ...current].slice(0, 40));
-        void qc.invalidateQueries({ queryKey: ["json-db", "documents", selectedName] });
-        void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+        void qc.invalidateQueries({ queryKey: ["json-db"] });
+        void qc.invalidateQueries({ queryKey: ["json-db"] });
       } catch {
         // Ignore malformed SSE frames; the stream will keep running.
       }
     };
     source.addEventListener("lcloud.db.change", onChange as EventListener);
     return () => source.close();
-  }, [qc, selectedName]);
+  }, [qc, selectedName, selectedDatabaseId]);
+
+  const createDatabase = useMutation({
+    mutationFn: (name: string) => jsonDb.createDatabase(name),
+    onSuccess: (row) => {
+      setSelectedDatabaseId(row.id);
+      setSelectedName("");
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+    },
+  });
 
   const createCollection = useMutation({
-    mutationFn: (name: string) => jsonDb.createCollection(name),
+    mutationFn: (name: string) =>
+      jsonDb.createCollection(name, selectedDatabaseId ?? undefined),
     onSuccess: (row) => {
       setNewCollection("");
       setCreateCollectionError(null);
       setSelectedName(row.name);
       setActivePage("documents");
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
     onError: (e) => setCreateCollectionError(errorText(e)),
   });
 
   const deleteCollection = useMutation({
-    mutationFn: (name: string) => jsonDb.deleteCollection(name),
+    mutationFn: (name: string) =>
+      jsonDb.deleteCollection(name, selectedDatabaseId ?? undefined),
     onSuccess: () => {
       setSelectedName("");
       void qc.invalidateQueries({ queryKey: ["json-db"] });
@@ -272,11 +311,23 @@ export function DbDashboard() {
         return jsonDb.createDocument(selectedName, {
           id: cleanId || undefined,
           data,
-        });
+        }, selectedDatabaseId ?? undefined);
       }
       if (!cleanId) throw new Error("Для set/patch нужен document id.");
-      if (writeMode === "set") return jsonDb.setDocument(selectedName, cleanId, data);
-      return jsonDb.patchDocument(selectedName, cleanId, data);
+      if (writeMode === "set") {
+        return jsonDb.setDocument(
+          selectedName,
+          cleanId,
+          data,
+          selectedDatabaseId ?? undefined,
+        );
+      }
+      return jsonDb.patchDocument(
+        selectedName,
+        cleanId,
+        data,
+        selectedDatabaseId ?? undefined,
+      );
     },
     onSuccess: (row) => {
       setDocError(null);
@@ -284,32 +335,38 @@ export function DbDashboard() {
       setDocId(row.id);
       setDocJson(prettyJson(row.data));
       setWriteMode("patch");
-      void qc.invalidateQueries({ queryKey: ["json-db", "documents", selectedName] });
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
     onError: (e) => setDocError(errorText(e)),
   });
 
   const deleteDocument = useMutation({
-    mutationFn: (row: JsonDocumentRow) => jsonDb.deleteDocument(selectedName, row.id),
+    mutationFn: (row: JsonDocumentRow) =>
+      jsonDb.deleteDocument(selectedName, row.id, selectedDatabaseId ?? undefined),
     onSuccess: () => {
       setSelectedDoc(null);
       setDocId("");
       setDocJson(EMPTY_DOC);
       setWriteMode("create");
-      void qc.invalidateQueries({ queryKey: ["json-db", "documents", selectedName] });
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
   const saveRules = useMutation({
-    mutationFn: () => jsonDb.setRules(selectedName, { read: readRule, write: writeRule }),
+    mutationFn: () =>
+      jsonDb.setRules(
+        selectedName,
+        { read: readRule, write: writeRule },
+        selectedDatabaseId ?? undefined,
+      ),
     onSuccess: (row) => {
       setRulesError(null);
       setReadRule(row.read);
       setWriteRule(row.write);
-      void qc.invalidateQueries({ queryKey: ["json-db", "rules", selectedName] });
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
     onError: (e) => setRulesError(errorText(e)),
   });
@@ -317,53 +374,58 @@ export function DbDashboard() {
   const saveValidator = useMutation({
     mutationFn: () => {
       const parsed = parseJsonObject(validatorText) as JsonWriteValidator;
-      return jsonDb.setValidator(selectedName, parsed);
+      return jsonDb.setValidator(
+        selectedName,
+        parsed,
+        selectedDatabaseId ?? undefined,
+      );
     },
     onSuccess: (row) => {
       setValidatorError(null);
       setValidatorText(row.validator ? prettyJson(row.validator) : EMPTY_VALIDATOR);
-      void qc.invalidateQueries({ queryKey: ["json-db", "validator", selectedName] });
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
     onError: (e) => setValidatorError(errorText(e)),
   });
 
   const clearValidator = useMutation({
-    mutationFn: () => jsonDb.deleteValidator(selectedName),
+    mutationFn: () =>
+      jsonDb.deleteValidator(selectedName, selectedDatabaseId ?? undefined),
     onSuccess: () => {
       setValidatorText(EMPTY_VALIDATOR);
       setValidatorError(null);
-      void qc.invalidateQueries({ queryKey: ["json-db", "validator", selectedName] });
-      void qc.invalidateQueries({ queryKey: ["json-db", "collections"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
   const createPublicKey = useMutation({
-    mutationFn: (label: string) => jsonDb.createPublicKey(label),
+    mutationFn: (label: string) =>
+      jsonDb.createPublicKey(label, selectedDatabaseId ?? undefined),
     onSuccess: (row) => {
       setNewPublicKeyLabel("");
       setCopiedKey(row.key);
-      void qc.invalidateQueries({ queryKey: ["json-db", "public-keys"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
   const revokePublicKey = useMutation({
     mutationFn: (id: number) => jsonDb.revokePublicKey(id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["json-db", "public-keys"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
   const createStorageKey = useMutation({
     mutationFn: () => {
-      const cloudId = Number(selectedStorageCloudId);
-      if (!cloudId) throw new Error("Select a cloud for media storage.");
+      if (!selectedDatabaseId) throw new Error("Select a database.");
       const maxBytes = storageMaxBytes.trim() ? Number(storageMaxBytes) : null;
       if (maxBytes !== null && (!Number.isFinite(maxBytes) || maxBytes <= 0)) {
         throw new Error("Max file bytes must be a positive number.");
       }
       return jsonDb.createStorageKey({
-        cloud_id: cloudId,
+        database_id: selectedDatabaseId,
         label: newStorageKeyLabel.trim(),
         allow_upload: storageAllowUpload,
         allow_list: storageAllowList,
@@ -375,14 +437,14 @@ export function DbDashboard() {
     onSuccess: (row) => {
       setNewStorageKeyLabel("");
       setCopiedKey(row.key);
-      void qc.invalidateQueries({ queryKey: ["json-db", "storage-public-keys"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
   const revokeStorageKey = useMutation({
     mutationFn: (id: number) => jsonDb.revokeStorageKey(id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["json-db", "storage-public-keys"] });
+      void qc.invalidateQueries({ queryKey: ["json-db"] });
     },
   });
 
@@ -470,6 +532,35 @@ export function DbDashboard() {
               </div>
             </div>
             <div className="flex min-w-0 items-center gap-2">
+              <label className="relative min-w-0">
+                <span className="sr-only">Database</span>
+                <select
+                  value={selectedDatabaseId ?? ""}
+                  onChange={(e) => {
+                    setSelectedDatabaseId(Number(e.target.value));
+                    setSelectedName("");
+                  }}
+                  className="h-10 w-44 rounded-lg border border-neutral-200 bg-bg px-3 text-sm font-medium dark:border-neutral-700 dark:bg-bg-dark sm:w-52"
+                >
+                  {(databasesQ.data ?? []).map((database) => (
+                    <option key={database.id} value={database.id}>
+                      {database.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Create database"
+                loading={createDatabase.isPending}
+                onClick={() => {
+                  const name = window.prompt("Database name")?.trim();
+                  if (name) createDatabase.mutate(name);
+                }}
+              >
+                <Plus size={14} />
+              </Button>
               <label className="relative min-w-0">
                 <span className="sr-only">DB console page</span>
                 <select
@@ -753,6 +844,18 @@ export function DbDashboard() {
                 </div>
               </div>
             </div>
+          </section>
+
+          <section
+            className={classNames(
+              "min-h-0",
+              activePage !== "media" && "hidden",
+            )}
+          >
+            <FilesPanel
+              cloudId={selectedDatabase?.cloud_id ?? null}
+              compressUploads
+            />
           </section>
 
           <section
@@ -1059,24 +1162,12 @@ await db.collection("posts").list({ limit: 20 });`}
                     </div>
                   </div>
                   <form
-                    className="grid gap-2 md:grid-cols-[1fr_1fr_auto]"
+                    className="grid gap-2 md:grid-cols-[1fr_auto]"
                     onSubmit={(e) => {
                       e.preventDefault();
                       createStorageKey.mutate();
                     }}
                   >
-                    <select
-                      value={selectedStorageCloudId}
-                      onChange={(e) => setSelectedStorageCloudId(e.target.value)}
-                      className="rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
-                    >
-                      <option value="">Select media cloud</option>
-                      {cloudsQ.data?.map((cloud) => (
-                        <option key={cloud.id} value={cloud.id}>
-                          {cloud.name} #{cloud.id}
-                        </option>
-                      ))}
-                    </select>
                     <input
                       value={newStorageKeyLabel}
                       onChange={(e) => setNewStorageKeyLabel(e.target.value)}
@@ -1095,7 +1186,7 @@ await db.collection("posts").list({ limit: 20 });`}
                       placeholder="max bytes"
                       className="rounded-lg border border-neutral-200 bg-bg px-3 py-2 text-sm dark:border-neutral-700 dark:bg-bg-dark"
                     />
-                    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-bg px-3 py-2 text-xs dark:bg-bg-dark md:col-span-2">
+                    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-bg px-3 py-2 text-xs dark:bg-bg-dark">
                       <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowUpload} onChange={(e) => setStorageAllowUpload(e.target.checked)} /> upload</label>
                       <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowList} onChange={(e) => setStorageAllowList(e.target.checked)} /> list</label>
                       <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={storageAllowDownload} onChange={(e) => setStorageAllowDownload(e.target.checked)} /> download</label>
@@ -1134,7 +1225,7 @@ await lcloud.collection("posts").insert({ file_id: file.id, url: lcloud.storage(
                       <StorageKeyRow
                         key={row.id}
                         row={row}
-                        cloudName={cloudsQ.data?.find((cloud) => cloud.id === row.cloud_id)?.name}
+                        cloudName={selectedDatabase?.name}
                         onCopy={() => {
                           void navigator.clipboard.writeText(row.key);
                           setCopiedKey(row.key);
