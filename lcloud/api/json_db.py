@@ -40,6 +40,21 @@ from lcloud.api.storage_public import (
     STORAGE_PUBLIC_KEY_PREFIX,
 )
 from lcloud.auth.v2_deps import CurrentUser, OptionalCurrentUser
+from lcloud.cache import (
+    JSON_DOCUMENT_TTL,
+    JSON_META_TTL,
+    JSON_QUERY_TTL,
+    PUBLIC_KEY_TTL,
+    cache,
+    invalidate_json_collection,
+    invalidate_json_document,
+    invalidate_json_public_keys,
+    k_json_document,
+    k_json_list,
+    k_json_meta,
+    k_json_public_key,
+    k_json_query,
+)
 from lcloud.config import get_settings
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import (
@@ -507,21 +522,33 @@ async def _get_collection_by_public_key_or_404(
     key: str,
     name: str,
 ) -> JsonCollection:
-    public_key = (
-        await sess.execute(
-            sa.select(JsonDbPublicKey).where(
-                JsonDbPublicKey.key == key,
-                JsonDbPublicKey.revoked_at.is_(None),
+    key_cache = await cache.get(k_json_public_key(key))
+    database_id: int | None = None
+    if isinstance(key_cache, dict) and isinstance(key_cache.get("database_id"), int):
+        database_id = int(key_cache["database_id"])
+    if database_id is None:
+        public_key = (
+            await sess.execute(
+                sa.select(JsonDbPublicKey).where(
+                    JsonDbPublicKey.key == key,
+                    JsonDbPublicKey.revoked_at.is_(None),
+                )
             )
+        ).scalar_one_or_none()
+        if public_key is None:
+            raise HTTPException(404, detail={"reason": "public_key_not_found"})
+        database_id = public_key.database_id
+        await cache.set(
+            k_json_public_key(key),
+            {"database_id": database_id},
+            ttl=PUBLIC_KEY_TTL,
+            namespace="json_public_key",
         )
-    ).scalar_one_or_none()
-    if public_key is None:
-        raise HTTPException(404, detail={"reason": "public_key_not_found"})
 
     collection = (
         await sess.execute(
             sa.select(JsonCollection).where(
-                JsonCollection.database_id == public_key.database_id,
+                JsonCollection.database_id == database_id,
                 JsonCollection.name == name,
             )
         )
@@ -1060,8 +1087,11 @@ async def public_key_delete_document(
     ),
 )
 async def db_meta() -> dict[str, Any]:
+    cached = await cache.get(k_json_meta())
+    if isinstance(cached, dict):
+        return cached
     settings = get_settings()
-    return {
+    body = {
         "name": "LCloud DB",
         "version": __version__,
         "documents": {
@@ -1223,6 +1253,8 @@ async def db_meta() -> dict[str, Any]:
             "deep_patch_merge",
         ],
     }
+    await cache.set(k_json_meta(), body, ttl=JSON_META_TTL, namespace="json_meta")
+    return body
 
 
 @router.get(
@@ -1308,6 +1340,7 @@ async def create_collection(
         )
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_collection(row.id)
         return _serialize_collection(row)
 
 
@@ -1394,6 +1427,7 @@ async def create_public_key(
         sess.add(row)
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_public_keys()
         return _serialize_public_key(row)
 
 
@@ -1417,6 +1451,7 @@ async def revoke_public_key(key_id: int, user: CurrentUser) -> dict[str, Any]:
         if row.revoked_at is None:
             row.revoked_at = _now()
             await sess.commit()
+        await invalidate_json_public_keys()
         return {"ok": True}
 
 
@@ -1464,6 +1499,7 @@ async def set_collection_rules(
         sess.add(_operation(row.id, None, "rules", {"read": body.read, "write": body.write}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_collection(row.id)
         return {
             "collection": row.name,
             "collection_id": row.id,
@@ -1515,6 +1551,7 @@ async def set_collection_validator(
         sess.add(_operation(row.id, None, "validator", {"validator": validator}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_collection(row.id)
         return {
             "collection": row.name,
             "collection_id": row.id,
@@ -1542,6 +1579,7 @@ async def delete_collection_validator(
         row.updated_at = _now()
         sess.add(_operation(row.id, None, "validator", {"validator": None}))
         await sess.commit()
+        await invalidate_json_collection(row.id)
     return Response(status_code=204)
 
 
@@ -1561,8 +1599,10 @@ async def delete_collection(
     sm = get_sessionmaker()
     async with sm() as sess:
         row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
+        collection_id = row.id
         await sess.delete(row)
         await sess.commit()
+        await invalidate_json_collection(collection_id)
     return Response(status_code=204)
 
 
@@ -1582,6 +1622,10 @@ async def list_documents(
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
+        cache_key = k_json_list(coll.id, limit, offset)
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         base = sa.select(JsonDocument).where(
             JsonDocument.collection_id == coll.id,
             JsonDocument.deleted_at.is_(None),
@@ -1598,12 +1642,14 @@ async def list_documents(
                 .offset(offset)
             )
         ).scalars().all()
-    return {
+    body = {
         "items": [_serialize_document(row) for row in rows],
         "total": int(total),
         "limit": limit,
         "offset": offset,
     }
+    await cache.set(cache_key, body, ttl=JSON_QUERY_TTL, namespace="json_list")
+    return body
 
 
 @router.post(
@@ -1649,6 +1695,7 @@ async def create_document(
         sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -1672,6 +1719,10 @@ async def query_documents(
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
+        cache_key = k_json_query(coll.id, body.model_dump(mode="json"))
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         rows = (
             await sess.execute(
                 sa.select(JsonDocument)
@@ -1700,7 +1751,7 @@ async def query_documents(
         )
 
     page = matched[body.offset : body.offset + body.limit]
-    return {
+    result = {
         "items": [
             {
                 "id": row.doc_id,
@@ -1716,6 +1767,8 @@ async def query_documents(
         "limit": body.limit,
         "offset": body.offset,
     }
+    await cache.set(cache_key, result, ttl=JSON_QUERY_TTL, namespace="json_query")
+    return result
 
 
 @router.post(
@@ -1830,6 +1883,7 @@ async def batch_documents(
         await sess.commit()
         for row in changed_rows:
             await sess.refresh(row)
+        await invalidate_json_collection(coll.id)
 
     serialized = {row.doc_id: _serialize_document(row) for row in changed_rows}
     return {
@@ -1889,8 +1943,14 @@ async def get_document(
     sm = get_sessionmaker()
     async with sm() as sess:
         coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
+        cache_key = k_json_document(coll.id, doc_id)
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
-    return _serialize_document(row)
+    body = _serialize_document(row)
+    await cache.set(cache_key, body, ttl=JSON_DOCUMENT_TTL, namespace="json_doc")
+    return body
 
 
 @router.put(
@@ -1940,6 +2000,7 @@ async def set_document(
         sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -1971,6 +2032,7 @@ async def patch_document(
         sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -2000,6 +2062,7 @@ async def delete_document(
         coll.updated_at = now
         sess.add(_operation(coll.id, doc_id, "delete", {}))
         await sess.commit()
+        await invalidate_json_document(coll.id, doc_id)
     return Response(status_code=204)
 
 
@@ -2019,6 +2082,10 @@ async def public_list_documents(
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
         _require_collection_access(coll, user=user, action="read")
+        cache_key = k_json_list(coll.id, limit, offset)
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         base = sa.select(JsonDocument).where(
             JsonDocument.collection_id == coll.id,
             JsonDocument.deleted_at.is_(None),
@@ -2033,12 +2100,14 @@ async def public_list_documents(
                 .offset(offset)
             )
         ).scalars().all()
-    return {
+    body = {
         "items": [_serialize_document(row) for row in rows],
         "total": int(total),
         "limit": limit,
         "offset": offset,
     }
+    await cache.set(cache_key, body, ttl=JSON_QUERY_TTL, namespace="json_list")
+    return body
 
 
 @public_router.post(
@@ -2085,6 +2154,7 @@ async def public_create_document(
         sess.add(_operation(coll.id, doc_id, "create", {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -2103,6 +2173,10 @@ async def public_query_documents(
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
         _require_collection_access(coll, user=user, action="read")
+        cache_key = k_json_query(coll.id, body.model_dump(mode="json"))
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         rows = (
             await sess.execute(
                 sa.select(JsonDocument)
@@ -2130,7 +2204,7 @@ async def public_query_documents(
         )
 
     page = matched[body.offset : body.offset + body.limit]
-    return {
+    result = {
         "items": [
             {
                 "id": row.doc_id,
@@ -2146,6 +2220,8 @@ async def public_query_documents(
         "limit": body.limit,
         "offset": body.offset,
     }
+    await cache.set(cache_key, result, ttl=JSON_QUERY_TTL, namespace="json_query")
+    return result
 
 
 @public_router.get(
@@ -2191,8 +2267,14 @@ async def public_get_document(
     async with sm() as sess:
         coll = await _get_collection_by_id_or_404(sess, collection_id=collection_id)
         _require_collection_access(coll, user=user, action="read")
+        cache_key = k_json_document(coll.id, doc_id)
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
-    return _serialize_document(row)
+    body = _serialize_document(row)
+    await cache.set(cache_key, body, ttl=JSON_DOCUMENT_TTL, namespace="json_doc")
+    return body
 
 
 @public_router.put(
@@ -2236,6 +2318,7 @@ async def public_set_document(
         sess.add(_operation(coll.id, doc_id, op, {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -2268,6 +2351,7 @@ async def public_patch_document(
         sess.add(_operation(coll.id, doc_id, "patch", {"data": body.data}))
         await sess.commit()
         await sess.refresh(row)
+        await invalidate_json_document(coll.id, doc_id)
         return _serialize_document(row)
 
 
@@ -2297,6 +2381,7 @@ async def public_delete_document(
         coll.updated_at = now
         sess.add(_operation(coll.id, doc_id, "delete", {}))
         await sess.commit()
+        await invalidate_json_document(coll.id, doc_id)
     return Response(status_code=204)
 
 

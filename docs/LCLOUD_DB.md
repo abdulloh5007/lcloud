@@ -324,11 +324,65 @@ batch writes, upload size, auth, and rate limits.
 | DB HTTP rate limit | no explicit per-user DB rate limit yet |
 | Storage HTTP rate limit | no explicit HTTP rate limit yet; Telegram MTProto limiter still applies |
 | MTProto limiter | read `rate_limits.telegram_mtproto` from `_meta` |
+| RAM cache backend | in-process memory, enabled by default |
+| RAM cache entries | default max 50,000 entries |
+| RAM cache memory | default max 134,217,728 bytes (128 MiB) |
+| JSON document cache TTL | default 30 seconds |
+| JSON list/query cache TTL | default 10 seconds |
+| DB/public/storage key cache TTL | default 300 seconds |
 
 If a request gets `429`, back off and retry later. If a Telegram-backed storage
 request fails with flood-wait style errors, use exponential backoff and avoid
 parallel upload bursts. For DB writes, prefer batch writes over many individual
 requests when the operations must succeed together.
+
+## RAM cache
+
+LCloud DB includes a built-in RAM cache, similar in purpose to Redis but
+embedded in the API process. SQLite and Telegram remain the source of truth.
+The cache only stores read responses and key lookups so hot public pages,
+document reads, list/query calls, and media publishable-key checks do not hit
+SQLite on every request.
+
+Cached data is invalidated automatically after writes:
+
+| Write | Invalidates |
+| --- | --- |
+| Document create/update/delete/batch | document, list, and query cache for that collection |
+| Collection rules/validator/delete | all cached reads for that collection |
+| Publishable DB key create/revoke | publishable key lookup cache |
+| Publishable storage key create/revoke | storage key lookup cache |
+| Database create | DB metadata and database lookup cache |
+
+Cache settings:
+
+```env
+LC_CACHE_ENABLED=true
+LC_CACHE_DEFAULT_TTL_SECONDS=30
+LC_CACHE_MAX_ENTRIES=50000
+LC_CACHE_MAX_BYTES=134217728
+LC_CACHE_JSON_DB_TTL_SECONDS=300
+LC_CACHE_JSON_COLLECTION_TTL_SECONDS=120
+LC_CACHE_JSON_DOCUMENT_TTL_SECONDS=30
+LC_CACHE_JSON_QUERY_TTL_SECONDS=10
+LC_CACHE_JSON_META_TTL_SECONDS=300
+LC_CACHE_PUBLIC_KEY_TTL_SECONDS=300
+```
+
+Owner-only cache inspection:
+
+```bash
+curl "$LCLOUD_ENDPOINT/api/v1/cache/stats" \
+  -H "Authorization: Bearer $LCLOUD_API_KEY"
+
+curl -X POST "$LCLOUD_ENDPOINT/api/v1/cache/clear" \
+  -H "Authorization: Bearer $LCLOUD_API_KEY"
+```
+
+`/api/v1/cache/stats` returns `hits`, `misses`, `hit_rate`, `entries`,
+`bytes`, limits, eviction counters, and per-namespace stats. Clear the cache
+after emergency manual database edits; normal API writes already invalidate the
+right keys.
 
 ### Collections
 

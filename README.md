@@ -170,3 +170,27 @@ systemctl start lcloud.service
 Use `--source-user-id OLD_ID` when restoring only one old owner namespace from
 Saved Messages. `--target-user-id` is the local user that will own restored
 collections on the new VPS.
+
+## Built-in RAM cache
+
+LCloud DB ships with an in-process TTL/LRU RAM cache for hot reads and key
+lookups. SQLite and Telegram remain the source of truth; normal API writes
+invalidate affected document/list/query/key cache entries automatically.
+
+Useful knobs:
+
+```env
+LC_CACHE_ENABLED=true
+LC_CACHE_MAX_ENTRIES=50000
+LC_CACHE_MAX_BYTES=134217728
+LC_CACHE_JSON_DOCUMENT_TTL_SECONDS=30
+LC_CACHE_JSON_QUERY_TTL_SECONDS=10
+LC_CACHE_PUBLIC_KEY_TTL_SECONDS=300
+```
+
+Owner-only cache inspection:
+
+```bash
+curl "$LCLOUD_ENDPOINT/api/v1/cache/stats" -H "Authorization: Bearer $LCLOUD_API_KEY"
+curl -X POST "$LCLOUD_ENDPOINT/api/v1/cache/clear" -H "Authorization: Bearer $LCLOUD_API_KEY"
+```

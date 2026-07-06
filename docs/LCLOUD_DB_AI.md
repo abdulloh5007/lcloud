@@ -184,9 +184,56 @@ Current contract:
 | V2 login rate limit | 10 challenge/verify requests per 5 minutes per IP |
 | DB HTTP rate limit | no explicit per-user limit yet |
 | Storage HTTP rate limit | no explicit HTTP limit yet; Telegram MTProto limiter applies |
+| RAM cache backend | in-process memory, enabled by default |
+| RAM cache entries | default max 50,000 entries |
+| RAM cache memory | default max 128 MiB |
+| JSON document cache TTL | default 30 seconds |
+| JSON list/query cache TTL | default 10 seconds |
+| DB/public/storage key cache TTL | default 300 seconds |
 
 If you see `429`, back off. For upload bursts, also respect
 `meta.rate_limits.telegram_mtproto`.
+
+## Built-in RAM cache
+
+LCloud DB has an in-process TTL/LRU RAM cache. Treat it as an acceleration
+layer, not the source of truth. Do not add Redis, local JSON cache files, or a
+client-side database fallback unless the deployment explicitly asks for that.
+
+The cache is safe for normal SDK/REST use because API writes invalidate the
+affected collection/document/list/query keys. Reads may be cached for short
+TTLs:
+
+| Cached area | Default TTL |
+| --- | --- |
+| `_meta` | 300 seconds |
+| Database key lookup `lcdb_...` | 300 seconds |
+| Publishable DB key lookup `lcpk_...` | 300 seconds |
+| Publishable storage key lookup `lstore_...` | 300 seconds |
+| Single document | 30 seconds |
+| List/query response | 10 seconds |
+
+Operators can tune it with:
+
+```env
+LC_CACHE_ENABLED=true
+LC_CACHE_MAX_ENTRIES=50000
+LC_CACHE_MAX_BYTES=134217728
+LC_CACHE_DEFAULT_TTL_SECONDS=30
+LC_CACHE_JSON_DOCUMENT_TTL_SECONDS=30
+LC_CACHE_JSON_QUERY_TTL_SECONDS=10
+LC_CACHE_PUBLIC_KEY_TTL_SECONDS=300
+```
+
+Owner-only API:
+
+```text
+GET  /api/v1/cache/stats
+POST /api/v1/cache/clear
+```
+
+Use `stats` to verify hit rate and memory. Use `clear` only after manual DB
+repairs or emergency key/rule changes outside the API.
 
 ## Collection and document naming
 

@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.errors import RPCError
 
 from lcloud.auth.v2_deps import CurrentUser
-from lcloud.cache import invalidate_user_clouds
+from lcloud.cache import (
+    JSON_DB_TTL,
+    cache,
+    invalidate_json_database,
+    invalidate_user_clouds,
+    k_json_database_key,
+)
 from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import get_sessionmaker
 from lcloud.db.models import Cloud, JsonCollection, JsonDatabase, Owner, User
@@ -269,6 +275,7 @@ async def create_database(
         await sess.commit()
         await sess.refresh(database)
     await invalidate_user_clouds(user.id)
+    await invalidate_json_database(database.id)
     return serialize_database(database, telegram_chat_id=chat_id)
 
 
@@ -277,6 +284,10 @@ async def resolve_public_database(database_key: str) -> dict[str, Any]:
     key = database_key.strip()
     if not DATABASE_KEY_RE.match(key):
         raise HTTPException(404, detail={"reason": "database_not_found"})
+    cache_key = k_json_database_key(key)
+    cached = await cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
     sm = get_sessionmaker()
     async with sm() as sess:
         row = (
@@ -286,9 +297,11 @@ async def resolve_public_database(database_key: str) -> dict[str, Any]:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(404, detail={"reason": "database_not_found"})
-        return {
+        body = {
             "id": row.id,
             "database_key": row.database_key,
             "name": row.name,
             "telegram_backed": row.cloud_id is not None,
         }
+    await cache.set(cache_key, body, ttl=JSON_DB_TTL, namespace="json_database")
+    return body

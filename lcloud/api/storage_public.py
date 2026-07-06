@@ -8,6 +8,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 import sqlalchemy as sa
@@ -22,7 +23,14 @@ from lcloud.api.json_databases import DatabaseKeyQuery, resolve_database
 from lcloud.api.v2_files import _ensure_userbot_authorized, _serialize, _stream_to_temp
 from lcloud.auth.storage_quota import assert_can_store, increment_used
 from lcloud.auth.v2_deps import CurrentUser
-from lcloud.cache import invalidate_files_in_cloud, invalidate_user_quota
+from lcloud.cache import (
+    PUBLIC_KEY_TTL,
+    cache,
+    invalidate_files_in_cloud,
+    invalidate_json_storage_keys,
+    invalidate_user_quota,
+    k_json_storage_key,
+)
 from lcloud.config import get_settings
 from lcloud.crypto.keys import ensure_admin_keypair
 from lcloud.db.base import get_sessionmaker
@@ -142,6 +150,15 @@ async def _get_cloud_for_owner(cloud_id: int, user: User) -> Cloud:
 
 
 async def _load_public_storage_context(storage_key: str) -> tuple[StoragePublicKey, Cloud, User]:
+    cached = await cache.get(k_json_storage_key(storage_key))
+    if isinstance(cached, dict):
+        key = SimpleNamespace(**cached["key"])
+        cloud = SimpleNamespace(**cached["cloud"])
+        user = SimpleNamespace(**cached["user"])
+        if getattr(user, "suspended_at", None) is not None:
+            raise HTTPException(403, detail={"reason": "suspended"})
+        return key, cloud, user  # type: ignore[return-value]
+
     sm = get_sessionmaker()
     async with sm() as sess:
         row = (
@@ -176,6 +193,35 @@ async def _load_public_storage_context(storage_key: str) -> tuple[StoragePublicK
             ).scalar_one_or_none()
         if database is None or database.cloud_id != cloud.id:
             raise HTTPException(403, detail={"reason": "storage_key_database_mismatch"})
+    await cache.set(
+        k_json_storage_key(storage_key),
+        {
+            "key": {
+                "id": row.id,
+                "database_id": row.database_id,
+                "owner_user_id": row.owner_user_id,
+                "cloud_id": row.cloud_id,
+                "allow_upload": row.allow_upload,
+                "allow_list": row.allow_list,
+                "allow_download": row.allow_download,
+                "allow_delete": row.allow_delete,
+                "max_file_bytes": row.max_file_bytes,
+            },
+            "cloud": {
+                "id": cloud.id,
+                "chat_id": cloud.chat_id,
+                "owner_user_id": cloud.owner_user_id,
+            },
+            "user": {
+                "id": user.id,
+                "suspended_at": (
+                    user.suspended_at.isoformat() if user.suspended_at else None
+                ),
+            },
+        },
+        ttl=PUBLIC_KEY_TTL,
+        namespace="json_storage_key",
+    )
     return row, cloud, user
 
 
@@ -280,6 +326,7 @@ async def create_storage_public_key(body: StoragePublicKeyIn, user: CurrentUser)
         sess.add(row)
         await sess.commit()
         await sess.refresh(row)
+    await invalidate_json_storage_keys()
     return _serialize_key(row)
 
 
@@ -300,6 +347,7 @@ async def revoke_storage_public_key(key_id: int, user: CurrentUser) -> dict[str,
         if row.revoked_at is None:
             row.revoked_at = _now()
             await sess.commit()
+    await invalidate_json_storage_keys()
     return {"ok": True}
 
 

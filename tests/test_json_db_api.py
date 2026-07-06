@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def app_client(
     from lcloud.api import app_auth as app_auth_mod
     from lcloud.api import auth_v2 as auth_v2_mod
     from lcloud.api import json_db as json_db_mod
+    from lcloud.cache import cache as global_cache
     from lcloud.config import get_settings
     from lcloud.db import base as base_mod
     from lcloud.userbot.client import set_userbot_manager
@@ -38,6 +40,7 @@ def app_client(
     auth_v2_mod._v2_rate.reset()
     app_auth_mod.reset_app_auth_rate_limit()
     json_db_mod.reset_json_db_public_rate_limits()
+    asyncio.run(global_cache.clear())
 
     from lcloud.main import create_app
 
@@ -53,6 +56,7 @@ def app_client(
         auth_v2_mod._v2_rate.reset()
         app_auth_mod.reset_app_auth_rate_limit()
         json_db_mod.reset_json_db_public_rate_limits()
+        asyncio.run(global_cache.clear())
 
 
 def _login(client: TestClient) -> int:
@@ -378,6 +382,49 @@ def test_json_db_public_access_rules(app_client: TestClient) -> None:
     )
     assert public_write.status_code == 201, public_write.text
     assert public_write.json()["data"]["title"] == "Browser"
+
+
+def test_json_db_cache_hits_and_invalidates_after_write(app_client: TestClient) -> None:
+    _login(app_client)
+    owner_cookie = app_client.cookies.get("lc_user_session")
+    assert owner_cookie
+    created = app_client.post("/api/v1/db/collections", json={"name": "cached_posts"})
+    assert created.status_code == 201, created.text
+    collection_id = created.json()["id"]
+    assert app_client.put(
+        "/api/v1/db/collections/cached_posts/rules",
+        json={"read": "public", "write": "owner"},
+    ).status_code == 200
+    assert app_client.post(
+        "/api/v1/db/cached_posts",
+        json={"id": "one", "data": {"title": "v1"}},
+    ).status_code == 201
+
+    assert app_client.post("/api/v1/cache/clear").status_code == 200
+    app_client.cookies.clear()
+
+    path = f"/api/v1/public/db/{collection_id}/one"
+    first = app_client.get(path)
+    second = app_client.get(path)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json()["data"]["title"] == "v1"
+
+    app_client.cookies.set("lc_user_session", owner_cookie)
+    stats = app_client.get("/api/v1/cache/stats")
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["namespaces"]["json_doc"]["hits"] >= 1
+
+    patched = app_client.patch(
+        "/api/v1/db/cached_posts/one",
+        json={"data": {"title": "v2"}},
+    )
+    assert patched.status_code == 200, patched.text
+
+    app_client.cookies.clear()
+    after = app_client.get(path)
+    assert after.status_code == 200, after.text
+    assert after.json()["data"]["title"] == "v2"
 
 
 def test_json_db_publishable_key_public_browser_flow(app_client: TestClient) -> None:

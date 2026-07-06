@@ -4,6 +4,7 @@ from lcloud.api.api_keys import router as api_keys_router
 from lcloud.api.app_auth import router as app_auth_router
 from lcloud.api.auth import router as auth_router
 from lcloud.api.auth_v2 import router as auth_v2_router
+from lcloud.api.cache_admin import router as cache_admin_router
 from lcloud.api.clouds import router as clouds_router
 from lcloud.api.files import (
     clouds_files_router,
@@ -39,6 +40,7 @@ __all__ = [
     "app_auth_router",
     "auth_router",
     "auth_v2_router",
+    "cache_admin_router",
     "clouds_files_router",
     "clouds_router",
     "file_tags_router",
