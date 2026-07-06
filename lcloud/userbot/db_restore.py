@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import sqlalchemy as sa
 
+from lcloud.api.json_databases import _allocate_database_key
 from lcloud.config import get_settings
 from lcloud.db.base import dispose_engine, get_sessionmaker, init_engine
 from lcloud.db.bootstrap import run_migrations
@@ -224,6 +225,7 @@ async def restore_json_db_segments(
         if database is None:
             database = JsonDatabase(
                 owner_user_id=target_owner_user_id,
+                database_key=await _allocate_database_key(sess),
                 name="Restored database",
                 is_default=True,
             )

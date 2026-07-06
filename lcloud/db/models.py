@@ -344,6 +344,7 @@ class JsonDatabase(Base):
     cloud_id: Mapped[int | None] = mapped_column(
         ForeignKey("clouds.id", ondelete="SET NULL"), unique=True, nullable=True
     )
+    database_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(

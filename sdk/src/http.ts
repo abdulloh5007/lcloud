@@ -9,6 +9,7 @@ export interface HttpClientOptions {
   credentials?: RequestCredentials;
   accessToken?: () => Promise<string | null>;
   databaseId?: number;
+  databaseKey?: string;
 }
 
 export class HttpClient {
@@ -18,6 +19,7 @@ export class HttpClient {
   private readonly credentials: RequestCredentials;
   private readonly accessToken?: () => Promise<string | null>;
   private readonly databaseId?: number;
+  private readonly databaseKey?: string;
 
   constructor(options: HttpClientOptions) {
     this.endpoint = options.endpoint.replace(/\/+$/, "");
@@ -26,6 +28,7 @@ export class HttpClient {
     this.credentials = options.credentials ?? "include";
     this.accessToken = options.accessToken;
     this.databaseId = options.databaseId;
+    this.databaseKey = options.databaseKey;
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -50,12 +53,16 @@ export class HttpClient {
   url(path: string): string {
     const url = new URL(path, `${this.endpoint}/`);
     if (
-      this.databaseId !== undefined &&
+      (this.databaseId !== undefined || this.databaseKey !== undefined) &&
       (url.pathname.startsWith("/api/v1/db/") ||
         url.pathname === "/api/v1/storage/public-keys") &&
       url.pathname !== "/api/v1/db/_meta"
     ) {
-      url.searchParams.set("database_id", String(this.databaseId));
+      if (this.databaseKey !== undefined) {
+        url.searchParams.set("database_key", this.databaseKey);
+      } else if (this.databaseId !== undefined) {
+        url.searchParams.set("database_id", String(this.databaseId));
+      }
     }
     return url.toString();
   }

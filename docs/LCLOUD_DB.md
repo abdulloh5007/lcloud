@@ -50,13 +50,25 @@ Create and select a database before creating collections:
 ```ts
 const admin = createClient({ endpoint, apiKey });
 const project = await admin.createDatabase("website");
-const db = admin.database(project.id);
+const db = admin.database(project.database_key);
 await db.ensureCollection("posts");
 ```
 
 Creating the database creates its Telegram chat. `project.cloud_id` is used by
 server-side media helpers; browser storage keys created through the scoped
 client automatically use that same cloud.
+
+Every Database also has a public `database_key` with prefix `lcdb_`. It is a
+Firebase-style project identifier, not an auth secret. Use it to select the DB
+from SDK/config:
+
+```env
+LCLOUD_DATABASE_KEY=lcdb_...
+```
+
+Only an owner API key (`lc-...`) or the dashboard can create Databases. A
+publishable DB key (`lcpk_...`) can only access collections inside its own
+Database according to collection rules.
 
 ## Authentication
 
@@ -110,6 +122,7 @@ import { createBrowserClient } from "@lcloud/db";
 
 const lcloud = createBrowserClient({
   endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  databaseKey: import.meta.env.VITE_LCLOUD_DATABASE_KEY,
   publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
 });
 

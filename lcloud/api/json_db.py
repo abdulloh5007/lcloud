@@ -31,7 +31,7 @@ from lcloud.api.app_auth import (
     OptionalPublicPrincipal,
     PublicPrincipal,
 )
-from lcloud.api.json_databases import resolve_database
+from lcloud.api.json_databases import DatabaseKeyQuery, resolve_database
 from lcloud.api.storage_public import (
     MAX_STORAGE_PUBLIC_KEYS_PER_USER,
     PUBLIC_STORAGE_RATE_WINDOW_SECONDS,
@@ -92,6 +92,9 @@ _public_write_rate = RateLimiter(
 class CollectionIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     database_id: int | None = Field(default=None, ge=1)
+    database_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^lcdb_[a-z2-9]{24}$"
+    )
 
     @field_validator("name")
     @classmethod
@@ -105,6 +108,9 @@ class CollectionIn(BaseModel):
 class PublicKeyIn(BaseModel):
     label: str = Field(default="", max_length=64)
     database_id: int | None = Field(default=None, ge=1)
+    database_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^lcdb_[a-z2-9]{24}$"
+    )
 
 
 class CollectionRulesIn(BaseModel):
@@ -450,13 +456,20 @@ async def _get_collection_or_404(
     *,
     user_id: int,
     database_id: int | None,
+    database_key: str | None = None,
     name: str,
 ) -> JsonCollection:
     query = sa.select(JsonCollection).where(
         JsonCollection.owner_user_id == user_id,
         JsonCollection.name == name,
     )
-    if database_id is None:
+    if database_key is not None:
+        query = query.join(
+            JsonDatabase, JsonDatabase.id == JsonCollection.database_id
+        ).where(JsonDatabase.database_key == database_key)
+        if database_id is not None:
+            query = query.where(JsonCollection.database_id == database_id)
+    elif database_id is None:
         default_database = (
             sa.select(JsonDatabase.id)
             .where(JsonDatabase.owner_user_id == user_id)
@@ -1065,6 +1078,12 @@ async def db_meta() -> dict[str, Any]:
         "databases": {
             "list_create_path": "/api/v1/db/databases",
             "scope_query_param": "database_id",
+            "scope_key_query_param": "database_key",
+            "database_key_prefix": "lcdb_",
+            "database_key_public_resolve_path": (
+                "/api/v1/public/db/databases/{database_key}"
+            ),
+            "database_creation_requires_owner_api": True,
             "telegram_chat_per_database": True,
             "contains": ["collections", "documents", "media", "keys", "backups"],
         },
@@ -1112,6 +1131,7 @@ async def db_meta() -> dict[str, Any]:
             "write_validator_path": "/api/v1/db/collections/{collection}/validator",
             "publishable_key_manage_path": "/api/v1/db/public-keys",
             "publishable_key_prefix": DB_PUBLIC_KEY_PREFIX,
+            "publishable_key_can_create_databases": False,
             "max_publishable_keys_per_user": MAX_DB_PUBLIC_KEYS_PER_USER,
             "public_read_rate_limit": {
                 "capacity": PUBLIC_READ_RATE_LIMIT,
@@ -1209,10 +1229,10 @@ async def db_meta() -> dict[str, Any]:
     "/backup/status",
     summary="JSON DB Telegram backup status",
 )
-async def backup_status(user: CurrentUser, database_id: DatabaseQuery = None) -> dict[str, Any]:
+async def backup_status(user: CurrentUser, database_id: DatabaseQuery = None, database_key: DatabaseKeyQuery = None) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:
-        database = await resolve_database(sess, user=user, database_id=database_id)
+        database = await resolve_database(sess, user=user, database_id=database_id, database_key=database_key)
     return await get_json_db_backup_status(user.id, database.id)
 
 
@@ -1222,11 +1242,13 @@ async def backup_status(user: CurrentUser, database_id: DatabaseQuery = None) ->
     description="Returns collections owned by the current V2 user.",
 )
 async def list_collections(
-    user: CurrentUser, database_id: DatabaseQuery = None
+    user: CurrentUser,
+    database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
 ) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
-        database = await resolve_database(sess, user=user, database_id=database_id)
+        database = await resolve_database(sess, user=user, database_id=database_id, database_key=database_key)
         rows = (
             await sess.execute(
                 sa.select(JsonCollection)
@@ -1246,12 +1268,15 @@ async def list_collections(
     summary="Create JSON DB collection",
 )
 async def create_collection(
-    body: CollectionIn, user: CurrentUser, database_id: DatabaseQuery = None
+    body: CollectionIn,
+    user: CurrentUser,
+    database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
 ) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:
         database = await resolve_database(
-            sess, user=user, database_id=body.database_id or database_id
+            sess, user=user, database_id=body.database_id or database_id, database_key=body.database_key or database_key
         )
         existing = (
             await sess.execute(
@@ -1295,11 +1320,13 @@ async def create_collection(
     ),
 )
 async def list_public_keys(
-    user: CurrentUser, database_id: DatabaseQuery = None
+    user: CurrentUser,
+    database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
 ) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
-        database = await resolve_database(sess, user=user, database_id=database_id)
+        database = await resolve_database(sess, user=user, database_id=database_id, database_key=database_key)
         rows = (
             await sess.execute(
                 sa.select(JsonDbPublicKey)
@@ -1319,12 +1346,15 @@ async def list_public_keys(
     summary="Create publishable DB key",
 )
 async def create_public_key(
-    body: PublicKeyIn, user: CurrentUser, database_id: DatabaseQuery = None
+    body: PublicKeyIn,
+    user: CurrentUser,
+    database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
 ) -> dict[str, Any]:
     sm = get_sessionmaker()
     async with sm() as sess:
         database = await resolve_database(
-            sess, user=user, database_id=body.database_id or database_id
+            sess, user=user, database_id=body.database_id or database_id, database_key=body.database_key or database_key
         )
         active = (
             await sess.execute(
@@ -1397,12 +1427,13 @@ async def revoke_public_key(key_id: int, user: CurrentUser) -> dict[str, Any]:
 async def get_collection_rules(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         return {
             "collection": row.name,
             "collection_id": row.id,
@@ -1420,12 +1451,13 @@ async def set_collection_rules(
     body: CollectionRulesIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row.read_rule = body.read
         row.write_rule = body.write
         row.updated_at = _now()
@@ -1448,12 +1480,13 @@ async def set_collection_rules(
 async def get_collection_validator(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         return {
             "collection": row.name,
             "collection_id": row.id,
@@ -1469,13 +1502,14 @@ async def set_collection_validator(
     body: WriteValidatorIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     validator = body.model_dump()
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row.write_validator_json = _json_dumps(validator)
         row.updated_at = _now()
         sess.add(_operation(row.id, None, "validator", {"validator": validator}))
@@ -1497,12 +1531,13 @@ async def set_collection_validator(
 async def delete_collection_validator(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> Response:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row.write_validator_json = None
         row.updated_at = _now()
         sess.add(_operation(row.id, None, "validator", {"validator": None}))
@@ -1519,12 +1554,13 @@ async def delete_collection_validator(
 async def delete_collection(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> Response:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        row = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         await sess.delete(row)
         await sess.commit()
     return Response(status_code=204)
@@ -1537,6 +1573,7 @@ async def delete_collection(
 async def list_documents(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -1544,7 +1581,7 @@ async def list_documents(
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         base = sa.select(JsonDocument).where(
             JsonDocument.collection_id == coll.id,
             JsonDocument.deleted_at.is_(None),
@@ -1578,6 +1615,7 @@ async def create_document(
     body: CreateDocIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
@@ -1585,7 +1623,7 @@ async def create_document(
     _validate_doc_id(doc_id)
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         existing = await _find_document(sess, collection_id=coll.id, doc_id=doc_id)
         if existing is not None and existing.deleted_at is None:
             raise HTTPException(409, detail={"reason": "document_exists"})
@@ -1627,12 +1665,13 @@ async def query_documents(
     body: QueryIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         rows = (
             await sess.execute(
                 sa.select(JsonDocument)
@@ -1691,13 +1730,14 @@ async def batch_documents(
     body: BatchIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
 ) -> dict[str, Any]:
     name = _validate_collection_name(collection)
     now = _now()
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         results: list[dict[str, Any]] = []
         changed_rows: list[JsonDocument] = []
 
@@ -1812,6 +1852,7 @@ async def stream_collection_events(
     request: Request,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     since: int = Query(default=0, ge=0),
     once: bool = Query(default=False),
@@ -1819,7 +1860,7 @@ async def stream_collection_events(
     name = _validate_collection_name(collection)
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         collection_id = coll.id
     return _event_stream_response(
         _stream_collection_events(
@@ -1839,6 +1880,7 @@ async def stream_collection_events(
 async def get_document(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     doc_id: str = Path(..., min_length=1, max_length=128),
 ) -> dict[str, Any]:
@@ -1846,7 +1888,7 @@ async def get_document(
     doc_id = _validate_doc_id(doc_id)
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
     return _serialize_document(row)
 
@@ -1859,6 +1901,7 @@ async def set_document(
     body: SetDocIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     doc_id: str = Path(..., min_length=1, max_length=128),
 ) -> dict[str, Any]:
@@ -1867,7 +1910,7 @@ async def set_document(
     now = _now()
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row = (
             await sess.execute(
                 sa.select(JsonDocument).where(
@@ -1908,6 +1951,7 @@ async def patch_document(
     body: PatchDocIn,
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     doc_id: str = Path(..., min_length=1, max_length=128),
 ) -> dict[str, Any]:
@@ -1916,7 +1960,7 @@ async def patch_document(
     now = _now()
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
         data = _json_loads(row.data_json)
         data.update(body.data)
@@ -1939,6 +1983,7 @@ async def patch_document(
 async def delete_document(
     user: CurrentUser,
     database_id: DatabaseQuery = None,
+    database_key: DatabaseKeyQuery = None,
     collection: str = Path(..., min_length=1, max_length=64),
     doc_id: str = Path(..., min_length=1, max_length=128),
 ) -> Response:
@@ -1947,7 +1992,7 @@ async def delete_document(
     now = _now()
     sm = get_sessionmaker()
     async with sm() as sess:
-        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, name=name)
+        coll = await _get_collection_or_404(sess, user_id=user.id, database_id=database_id, database_key=database_key, name=name)
         row = await _get_document_or_404(sess, collection_id=coll.id, doc_id=doc_id)
         row.deleted_at = now
         row.version += 1

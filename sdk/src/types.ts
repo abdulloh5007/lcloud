@@ -24,6 +24,7 @@ export interface LCloudDbOptions {
   endpoint: string;
   apiKey?: string;
   databaseId?: number;
+  databaseKey?: string;
   fetch?: typeof fetch;
   /**
    * Defaults to "include" so same-origin LCloud web sessions work.
@@ -36,6 +37,7 @@ export interface LCloudDbOptions {
 
 export interface LCloudPublicClientOptions {
   endpoint: string;
+  databaseKey?: string;
   publishableKey?: string;
   storageKey?: string;
   fetch?: typeof fetch;
@@ -111,6 +113,7 @@ export interface StoragePublicKeyRow {
 export interface CreateStoragePublicKeyInput {
   cloud_id?: number;
   database_id?: number;
+  database_key?: string;
   label?: string;
   allow_upload?: boolean;
   allow_list?: boolean;
@@ -129,6 +132,7 @@ export interface CloudRow {
 
 export interface DatabaseRow {
   id: number;
+  database_key: string;
   name: string;
   owner_user_id: number;
   cloud_id: number | null;

@@ -131,6 +131,7 @@ export interface JsonStoragePublicKeyRow {
 export interface CreateStoragePublicKeyInput {
   cloud_id?: number;
   database_id?: number;
+  database_key?: string;
   label?: string;
   allow_upload?: boolean;
   allow_list?: boolean;
@@ -141,6 +142,7 @@ export interface CreateStoragePublicKeyInput {
 
 export interface JsonDatabaseRow {
   id: number;
+  database_key: string;
   name: string;
   owner_user_id: number;
   cloud_id: number | null;

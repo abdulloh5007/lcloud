@@ -46,7 +46,9 @@ console.log(meta.pagination.max_limit, meta.batch.max_writes);
 
 // Creates one Telegram chat that contains this database's media and backups.
 const database = await admin.createDatabase("my-app");
-const db = admin.database(database.id);
+console.log(database.database_key); // lcdb_... public DB identifier
+
+const db = admin.database(database.database_key);
 await db.ensureCollection("users");
 
 const users = db.collection("users");
@@ -78,8 +80,11 @@ await users.update("alice", {
 });
 ```
 
-`admin.database(id)` scopes collection, key, and backup operations. Existing
-unscoped code continues to use the migrated default/legacy database.
+`admin.database(id)` or `admin.database("lcdb_...")` scopes collection, key,
+media, and backup operations. The `lcdb_...` database key is a public
+identifier like a Firebase project config value; it is not a secret and cannot
+create databases. Existing unscoped code continues to use the migrated
+default/legacy database.
 
 ## Two modes: server/admin and browser-only
 
@@ -141,6 +146,7 @@ import { createBrowserClient } from "@lcloud/db";
 
 const lcloud = createBrowserClient({
   endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  databaseKey: import.meta.env.VITE_LCLOUD_DATABASE_KEY,
   publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
 });
 

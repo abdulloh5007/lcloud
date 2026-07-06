@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.errors import RPCError
@@ -20,6 +22,17 @@ from lcloud.userbot.client import UserbotManager, get_userbot_manager
 from lcloud.userbot.clouds import CloudCreationError, create_cloud_chat
 
 router = APIRouter(prefix="/api/v1/db/databases", tags=["json_databases"])
+public_router = APIRouter(
+    prefix="/api/v1/public/db/databases", tags=["json_databases_public"]
+)
+
+DATABASE_KEY_PREFIX = "lcdb_"
+DATABASE_KEY_ENTROPY_LEN = 24
+DATABASE_KEY_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+DATABASE_KEY_RE = re.compile(r"^lcdb_[a-z2-9]{24}$")
+DatabaseKeyQuery = Annotated[
+    str | None, Query(min_length=1, max_length=64, pattern=r"^lcdb_[a-z2-9]{24}$")
+]
 
 
 class CreateDatabaseIn(BaseModel):
@@ -34,6 +47,24 @@ class CreateDatabaseIn(BaseModel):
         return name
 
 
+def _new_database_key() -> str:
+    body = "".join(
+        secrets.choice(DATABASE_KEY_ALPHABET) for _ in range(DATABASE_KEY_ENTROPY_LEN)
+    )
+    return f"{DATABASE_KEY_PREFIX}{body}"
+
+
+async def _allocate_database_key(sess: AsyncSession) -> str:
+    key = _new_database_key()
+    while (
+        await sess.execute(
+            sa.select(JsonDatabase.id).where(JsonDatabase.database_key == key)
+        )
+    ).scalar_one_or_none():
+        key = _new_database_key()
+    return key
+
+
 def serialize_database(
     row: JsonDatabase,
     *,
@@ -42,6 +73,7 @@ def serialize_database(
 ) -> dict[str, Any]:
     return {
         "id": row.id,
+        "database_key": row.database_key,
         "name": row.name,
         "owner_user_id": row.owner_user_id,
         "cloud_id": row.cloud_id,
@@ -70,6 +102,22 @@ async def get_database_or_404(
     return row
 
 
+async def get_database_by_key_or_404(
+    sess: AsyncSession,
+    *,
+    user: User,
+    database_key: str,
+) -> JsonDatabase:
+    row = (
+        await sess.execute(
+            sa.select(JsonDatabase).where(JsonDatabase.database_key == database_key)
+        )
+    ).scalar_one_or_none()
+    if row is None or (user.role != "admin" and row.owner_user_id != user.id):
+        raise HTTPException(404, detail={"reason": "database_not_found"})
+    return row
+
+
 async def get_default_database(
     sess: AsyncSession,
     *,
@@ -90,6 +138,7 @@ async def get_default_database(
         raise HTTPException(404, detail={"reason": "database_not_found"})
     row = JsonDatabase(
         owner_user_id=owner_user_id,
+        database_key=await _allocate_database_key(sess),
         name="Default database",
         is_default=True,
         updated_at=datetime.now(UTC),
@@ -104,7 +153,17 @@ async def resolve_database(
     *,
     user: User,
     database_id: int | None,
+    database_key: str | None = None,
 ) -> JsonDatabase:
+    if database_id is not None and database_key is not None:
+        row = await get_database_or_404(sess, user=user, database_id=database_id)
+        if row.database_key != database_key:
+            raise HTTPException(400, detail={"reason": "database_scope_conflict"})
+        return row
+    if database_key is not None:
+        return await get_database_by_key_or_404(
+            sess, user=user, database_key=database_key
+        )
     if database_id is not None:
         return await get_database_or_404(sess, user=user, database_id=database_id)
     return await get_default_database(sess, owner_user_id=user.id)
@@ -201,6 +260,7 @@ async def create_database(
         database = JsonDatabase(
             owner_user_id=user.id,
             cloud_id=cloud.id,
+            database_key=await _allocate_database_key(sess),
             name=name,
             is_default=False,
             updated_at=datetime.now(UTC),
@@ -210,3 +270,25 @@ async def create_database(
         await sess.refresh(database)
     await invalidate_user_clouds(user.id)
     return serialize_database(database, telegram_chat_id=chat_id)
+
+
+@public_router.get("/{database_key}")
+async def resolve_public_database(database_key: str) -> dict[str, Any]:
+    key = database_key.strip()
+    if not DATABASE_KEY_RE.match(key):
+        raise HTTPException(404, detail={"reason": "database_not_found"})
+    sm = get_sessionmaker()
+    async with sm() as sess:
+        row = (
+            await sess.execute(
+                sa.select(JsonDatabase).where(JsonDatabase.database_key == key)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, detail={"reason": "database_not_found"})
+        return {
+            "id": row.id,
+            "database_key": row.database_key,
+            "name": row.name,
+            "telegram_backed": row.cloud_id is not None,
+        }

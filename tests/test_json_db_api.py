@@ -230,33 +230,47 @@ def test_databases_isolate_collections_and_share_one_telegram_chat(
     second_db = second.json()
     assert first_db["cloud_id"] != second_db["cloud_id"]
     assert first_db["telegram_backed"] is True
+    assert first_db["database_key"].startswith("lcdb_")
+    assert second_db["database_key"].startswith("lcdb_")
+    assert first_db["database_key"] != second_db["database_key"]
+
+    public_db = app_client.get(
+        f"/api/v1/public/db/databases/{first_db['database_key']}"
+    )
+    assert public_db.status_code == 200, public_db.text
+    assert public_db.json()["database_key"] == first_db["database_key"]
 
     for database in (first_db, second_db):
+        scope = (
+            f"database_key={database['database_key']}"
+            if database is first_db
+            else f"database_id={database['id']}"
+        )
         created = app_client.post(
-            f"/api/v1/db/collections?database_id={database['id']}",
+            f"/api/v1/db/collections?{scope}",
             json={"name": "posts"},
         )
         assert created.status_code == 201, created.text
         assert created.json()["database_id"] == database["id"]
         assert app_client.put(
-            f"/api/v1/db/collections/posts/rules?database_id={database['id']}",
+            f"/api/v1/db/collections/posts/rules?{scope}",
             json={"read": "authenticated", "write": "authenticated"},
         ).status_code == 200
 
     assert len(app_client.get(
-        f"/api/v1/db/collections?database_id={first_db['id']}"
+        f"/api/v1/db/collections?database_key={first_db['database_key']}"
     ).json()) == 1
 
     storage_key = app_client.post(
         "/api/v1/storage/public-keys",
-        json={"database_id": first_db["id"], "label": "media"},
+        json={"database_key": first_db["database_key"], "label": "media"},
     )
     assert storage_key.status_code == 201, storage_key.text
     assert storage_key.json()["database_id"] == first_db["id"]
     assert storage_key.json()["cloud_id"] == first_db["cloud_id"]
 
     first_key = app_client.post(
-        f"/api/v1/db/public-keys?database_id={first_db['id']}",
+        f"/api/v1/db/public-keys?database_key={first_db['database_key']}",
         json={"label": "first-app"},
     ).json()["key"]
     second_key = app_client.post(
@@ -278,7 +292,7 @@ def test_databases_isolate_collections_and_share_one_telegram_chat(
     app_client.cookies.set("lc_user_session", owner_cookie)
 
     assert app_client.post(
-        f"/api/v1/db/posts?database_id={first_db['id']}",
+        f"/api/v1/db/posts?database_key={first_db['database_key']}",
         json={"id": "one", "data": {"title": "First"}},
     ).status_code == 201
 

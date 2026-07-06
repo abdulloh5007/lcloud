@@ -32,7 +32,7 @@ Then:
 
 ```ts
 const project = await admin.createDatabase("my-app");
-const db = admin.database(project.id);
+const db = admin.database(project.database_key);
 await db.ensureCollection("users");
 
 const users = db.collection("users");
@@ -56,9 +56,23 @@ const publicUsers = db.publicCollection(rules.collection_id);
 const publicAlice = await publicUsers.get("alice");
 ```
 
-Always reuse `admin.database(project.id)` for that project's collections and
-keys. Do not create a separate media cloud for a new Database. Unscoped legacy
-calls address only the migrated default database.
+Always reuse `admin.database(project.database_key)` for that project's
+collections and keys. Do not create a separate media cloud for a new Database.
+Unscoped legacy calls address only the migrated default database.
+
+Ask the user for these values when wiring an app:
+
+```env
+LCLOUD_ENDPOINT=https://tg-lcloud.duckdns.org
+LCLOUD_DATABASE_KEY=lcdb_...
+LCLOUD_DB_KEY=lcpk_...
+LCLOUD_STORAGE_KEY=lstore_...
+```
+
+`lcdb_...` identifies the Database, like a Firebase project config value.
+`lcpk_...` is the publishable DB access key. `lstore_...` is the publishable
+media key. None of these can create a Database; creation requires owner API
+key `lc-...` or DB Console.
 
 For a browser-only static site with no backend, use a publishable DB key:
 
@@ -67,6 +81,7 @@ import { createBrowserClient } from "@lcloud/db";
 
 const lcloud = createBrowserClient({
   endpoint: import.meta.env.VITE_LCLOUD_ENDPOINT,
+  databaseKey: import.meta.env.VITE_LCLOUD_DATABASE_KEY,
   publishableKey: import.meta.env.VITE_LCLOUD_DB_KEY,
 });
 

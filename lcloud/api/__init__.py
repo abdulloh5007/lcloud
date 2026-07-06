@@ -9,6 +9,7 @@ from lcloud.api.files import (
     clouds_files_router,
     files_router,
 )
+from lcloud.api.json_databases import public_router as public_json_databases_router
 from lcloud.api.json_databases import router as json_databases_router
 from lcloud.api.json_db import public_router as public_json_db_router
 from lcloud.api.json_db import router as json_db_router
@@ -51,6 +52,7 @@ __all__ = [
     "public_share_router",
     "public_storage_router",
     "public_json_db_router",
+    "public_json_databases_router",
     "search_router",
     "storage_public_keys_router",
     "shares_router",

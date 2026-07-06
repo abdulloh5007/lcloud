@@ -529,6 +529,23 @@ export function DbDashboard() {
                 <span>
                   page: <span className="font-medium text-neutral-700 dark:text-neutral-300">{currentPage.label}</span>
                 </span>
+                {selectedDatabase?.database_key && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      className="inline-flex min-w-0 items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 font-mono text-[11px] text-neutral-600 transition hover:border-blue-300 hover:text-blue-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-blue-700 dark:hover:text-blue-300"
+                      title="Copy database key"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(selectedDatabase.database_key);
+                        setCopiedKey(selectedDatabase.database_key);
+                      }}
+                    >
+                      <Copy size={11} />
+                      <span className="truncate">{selectedDatabase.database_key}</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <div className="flex min-w-0 items-center gap-2">

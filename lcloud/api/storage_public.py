@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from lcloud.api.compression import compress_image_in_place, is_compressible_mime
 from lcloud.api.compression_video import compress_video_in_place, is_compressible_video_mime
+from lcloud.api.json_databases import DatabaseKeyQuery, resolve_database
 from lcloud.api.v2_files import _ensure_userbot_authorized, _serialize, _stream_to_temp
 from lcloud.auth.storage_quota import assert_can_store, increment_used
 from lcloud.auth.v2_deps import CurrentUser
@@ -59,6 +60,9 @@ _public_storage_write_rate = RateLimiter(
 class StoragePublicKeyIn(BaseModel):
     cloud_id: int | None = Field(default=None, ge=1)
     database_id: int | None = Field(default=None, ge=1)
+    database_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^lcdb_[a-z2-9]{24}$"
+    )
     label: str = Field(default="", max_length=64)
     allow_upload: bool = True
     allow_list: bool = True
@@ -70,8 +74,8 @@ class StoragePublicKeyIn(BaseModel):
     def validate_permissions(self) -> StoragePublicKeyIn:
         if not any([self.allow_upload, self.allow_list, self.allow_download, self.allow_delete]):
             raise ValueError("at_least_one_permission_required")
-        if self.cloud_id is None and self.database_id is None:
-            raise ValueError("cloud_id_or_database_id_required")
+        if self.cloud_id is None and self.database_id is None and self.database_key is None:
+            raise ValueError("cloud_id_or_database_id_or_database_key_required")
         return self
 
 
@@ -179,10 +183,16 @@ async def _load_public_storage_context(storage_key: str) -> tuple[StoragePublicK
 async def list_storage_public_keys(
     user: CurrentUser,
     database_id: int | None = Query(default=None, ge=1),
+    database_key: DatabaseKeyQuery = None,
 ) -> list[dict[str, Any]]:
     sm = get_sessionmaker()
     async with sm() as sess:
         query = sa.select(StoragePublicKey).where(StoragePublicKey.owner_user_id == user.id)
+        if database_key is not None:
+            database = await resolve_database(
+                sess, user=user, database_id=database_id, database_key=database_key
+            )
+            database_id = database.id
         if database_id is not None:
             query = query.where(StoragePublicKey.database_id == database_id)
         rows = (
@@ -208,24 +218,22 @@ async def create_storage_public_key(body: StoragePublicKeyIn, user: CurrentUser)
             },
         )
     cloud_id = body.cloud_id
-    if body.database_id is not None:
+    resolved_database_id = body.database_id
+    if body.database_id is not None or body.database_key is not None:
         sm = get_sessionmaker()
         async with sm() as sess:
-            database = (
-                await sess.execute(
-                    sa.select(JsonDatabase).where(
-                        JsonDatabase.id == body.database_id,
-                        JsonDatabase.owner_user_id == user.id,
-                    )
-                )
-            ).scalar_one_or_none()
-        if database is None:
-            raise HTTPException(404, detail={"reason": "database_not_found"})
+            database = await resolve_database(
+                sess,
+                user=user,
+                database_id=body.database_id,
+                database_key=body.database_key,
+            )
         if database.cloud_id is None:
             raise HTTPException(409, detail={"reason": "database_not_telegram_backed"})
         if cloud_id is not None and cloud_id != database.cloud_id:
             raise HTTPException(422, detail={"reason": "database_cloud_mismatch"})
         cloud_id = database.cloud_id
+        resolved_database_id = database.id
     assert cloud_id is not None
     await _get_cloud_for_owner(cloud_id, user)
 
@@ -257,7 +265,7 @@ async def create_storage_public_key(body: StoragePublicKeyIn, user: CurrentUser)
             key = _new_storage_public_key()
 
         row = StoragePublicKey(
-            database_id=body.database_id,
+            database_id=resolved_database_id,
             owner_user_id=user.id,
             cloud_id=cloud_id,
             key=key,

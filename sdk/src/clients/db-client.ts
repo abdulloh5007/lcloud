@@ -36,8 +36,19 @@ export class LCloudDbClient {
     this.http = new HttpClient(options);
   }
 
-  database(id: number): LCloudDbClient {
-    return new LCloudDbClient({ ...this.options, databaseId: id });
+  database(database: number | string): LCloudDbClient {
+    if (typeof database === "string") {
+      return new LCloudDbClient({
+        ...this.options,
+        databaseId: undefined,
+        databaseKey: database,
+      });
+    }
+    return new LCloudDbClient({
+      ...this.options,
+      databaseId: database,
+      databaseKey: undefined,
+    });
   }
 
   async listDatabases(): Promise<DatabaseRow[]> {
@@ -107,6 +118,7 @@ export class LCloudDbClient {
       body: JSON.stringify({
         ...input,
         database_id: input.database_id ?? this.options.databaseId,
+        database_key: input.database_key ?? this.options.databaseKey,
       }),
     });
   }
